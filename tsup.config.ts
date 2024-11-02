@@ -1,0 +1,18 @@
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  clean: true,
+  entry: {
+    index: 'src/index.ts',
+    resolve: 'src/resolve.ts',
+    validate: 'src/validate.ts'
+  },
+  cjsInterop: true,
+  format: ['cjs', 'esm'],
+  keepNames: true,
+  minify: false,
+  shims: true,
+  splitting: false,
+  sourcemap: true,
+  target: 'node18'
+});

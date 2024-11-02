@@ -1,0 +1,40 @@
+{
+  "name": "@brandscale/schemas",
+  "description": "Schemas",
+  "version": "0.0.4",
+  "scripts": {
+    "eslint": "npx eslint --ext .ts .",
+    "test": "ts-mocha -r esbuild-register 'test/**/*.ts'",
+    "tsup": "npx tsup"
+  },
+  "module": "dist/index.mjs",
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./resolve": {
+      "import": "./dist/resolve.mjs",
+      "require": "./dist/resolve.js"
+    },
+    "./validate": {
+      "import": "./dist/validate.mjs",
+      "require": "./dist/validate.js"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "esbuild-register": "^3.5.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "ts-mocha": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5"
+  }
+}
