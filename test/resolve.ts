@@ -1,6 +1,6 @@
+import type { JSONSchema } from '~/types';
 import assert from 'node:assert';
 import { resolveValues } from '~/resolve';
-import type { JSONSchema } from '~/types';
 
 describe('resolve', () => {
   describe('required properties', () => {
@@ -8,10 +8,8 @@ describe('resolve', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
-          required: {
-            type: 'string',
-            minLength: 1
-          }
+          something: { type: 'string', required: true, minLength: 1 },
+          other: { type: 'string' }
         },
         required: ['required']
       };
@@ -41,7 +39,9 @@ describe('resolve', () => {
           settings: {}
         }
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Missing required property: name');
     });
   });
@@ -54,6 +54,9 @@ describe('resolve', () => {
           name: {
             type: 'string',
             minLength: 3
+          },
+          other: {
+            type: 'string'
           }
         }
       };
@@ -61,7 +64,32 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         name: 'ab'
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+      assert.strictEqual(result.errors[0].message, 'String length must be >= 3');
+    });
+
+    it('should validate string minimum length with multiple properties', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            minLength: 3
+          },
+          other: {
+            type: 'string'
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, {
+        name: 'ab'
+      });
+
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'String length must be >= 3');
     });
 
@@ -72,6 +100,9 @@ describe('resolve', () => {
           name: {
             type: 'string',
             maxLength: 10
+          },
+          other: {
+            type: 'string'
           }
         }
       };
@@ -79,7 +110,9 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         name: 'this is too long'
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'String length must be <= 10');
     });
 
@@ -91,13 +124,19 @@ describe('resolve', () => {
             type: 'string',
             minLength: 3,
             maxLength: 10
+          },
+          other: {
+            type: 'string'
           }
-        }
+        },
+        required: ['other']
       };
 
       const result = await resolveValues(schema, {
-        name: 'valid'
+        name: 'valid',
+        other: 'something'
       });
+
       assert.ok(result.ok);
       assert.strictEqual(result.value.name, 'valid');
     });
@@ -110,6 +149,9 @@ describe('resolve', () => {
         properties: {
           age: {
             type: 'number'
+          },
+          count: {
+            type: 'integer'
           }
         }
       };
@@ -117,7 +159,9 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         age: 'not a number'
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Value must be a number');
     });
 
@@ -127,6 +171,9 @@ describe('resolve', () => {
         properties: {
           count: {
             type: 'integer'
+          },
+          other: {
+            type: 'string'
           }
         }
       };
@@ -134,7 +181,32 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         count: 1.5
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+      assert.strictEqual(result.errors[0].message, 'Value must be an integer');
+    });
+
+    it('should validate required integer', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          count: {
+            type: 'integer'
+          },
+          other: {
+            type: 'string'
+          }
+        },
+        required: ['count']
+      };
+
+      const result = await resolveValues(schema, {
+        count: 1.1
+      });
+
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Value must be an integer');
     });
 
@@ -157,7 +229,9 @@ describe('resolve', () => {
         age: -1,
         count: 0
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 2);
       assert.strictEqual(result.errors[0].message, 'Value must be >= 0');
       assert.strictEqual(result.errors[1].message, 'Value must be >= 1');
     });
@@ -175,6 +249,7 @@ describe('resolve', () => {
         age: 25,
         count: 5
       });
+
       assert.ok(result.ok);
     });
   });
@@ -191,6 +266,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         type: 'personal'
       });
+
       assert.ok(result.ok);
     });
 
@@ -212,7 +288,9 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         type: 'business'
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Missing required property: taxId');
     });
 
@@ -235,7 +313,9 @@ describe('resolve', () => {
         type: 'business',
         taxId: '12345'
       });
+
       assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'String must match pattern: ^\\d{9}$');
     });
 
@@ -258,6 +338,7 @@ describe('resolve', () => {
         type: 'business',
         taxId: '123456789'
       });
+
       assert.ok(result.ok);
     });
   });
@@ -297,6 +378,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         tags: ['a', 'b', 'b', 'c', 'd']
       });
+
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 2);
     });
@@ -318,6 +400,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         tags: ['tag1', 'tag2', 'tag3']
       });
+
       assert.ok(result.ok);
     });
   });
@@ -350,6 +433,7 @@ describe('resolve', () => {
           settings: {}
         }
       });
+
       assert.ok(result.ok);
       assert.strictEqual(result.value.user.settings.theme, 'light');
       assert.strictEqual(result.value.user.settings.notifications, true);
@@ -442,9 +526,8 @@ describe('resolve', () => {
           username: 'johndoe'
           // missing password and role
         });
-
         assert.ok(!result.ok);
-        assert.strictEqual(result.errors.length > 0, true);
+        assert.strictEqual(result.errors.length, 2);
       });
     });
 
@@ -536,7 +619,7 @@ describe('resolve', () => {
         };
         const result = await resolveValues(schema, { value: 1 });
         assert.ok(!result.ok);
-        assert.strictEqual(result.errors.length > 0, true);
+        assert.strictEqual(result.errors.length, 1);
       });
 
       it('should resolve oneOf composition with default', async () => {
@@ -604,6 +687,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         credit_card: '1234-5678-9012-3456'
       });
+
       assert.ok(result.ok);
       assert.deepStrictEqual(result.value, {
         credit_card: '1234-5678-9012-3456',
@@ -633,6 +717,7 @@ describe('resolve', () => {
         'N_age': 25,
         'other': 'value'
       });
+
       assert.ok(result.ok);
       assert.strictEqual(result.value.S_name, 'test');
       assert.strictEqual(result.value.N_age, 25);
@@ -657,6 +742,7 @@ describe('resolve', () => {
         name: 'test',
         extra: 'value'
       });
+
       assert.ok(result.ok);
       assert.deepStrictEqual(result.value, {
         name: 'test',
@@ -677,6 +763,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         status: 'anything'
       });
+
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Value must be active');
@@ -693,6 +780,7 @@ describe('resolve', () => {
       const result = await resolveValues(schema, {
         role: 'invalid'
       });
+
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Value must be one of: admin, user');
