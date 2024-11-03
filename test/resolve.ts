@@ -27,7 +27,7 @@ describe('resolve', () => {
       });
     });
 
-    it('should resolve conditional schemas', async () => {
+    it('should resolve conditional schemas (minimum)', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -49,9 +49,37 @@ describe('resolve', () => {
       };
 
       const adult = await resolveValues(schema, { age: 20 });
-      const minor = await resolveValues(schema, { age: 16 });
-
       assert.strictEqual(adult.canVote, true);
+
+      const minor = await resolveValues(schema, { age: 16 });
+      assert.strictEqual(minor.canVote, false);
+    });
+
+    it('should resolve conditional schemas (maximum)', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          age: { type: 'number' }
+        },
+        if: {
+          properties: { age: { maximum: 18 } }
+        },
+        then: {
+          properties: {
+            canVote: { type: 'boolean', const: false }
+          }
+        },
+        else: {
+          properties: {
+            canVote: { type: 'boolean', const: true }
+          }
+        }
+      };
+
+      const adult = await resolveValues(schema, { age: 20 });
+      assert.strictEqual(adult.canVote, true);
+
+      const minor = await resolveValues(schema, { age: 16 });
       assert.strictEqual(minor.canVote, false);
     });
 
@@ -185,9 +213,9 @@ describe('resolve', () => {
         'other': 'value'
       });
 
-      assert.strictEqual(result['S_name'], 'test');
-      assert.strictEqual(result['N_age'], 25);
-      assert.strictEqual(result['other'], 'value');
+      assert.strictEqual(result.S_name, 'test');
+      assert.strictEqual(result.N_age, 25);
+      assert.strictEqual(result.other, 'value');
     });
 
     it('should handle additional properties', async () => {

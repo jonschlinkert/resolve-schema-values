@@ -1,7 +1,15 @@
 {
-  "name": "@brandscale/schemas",
-  "description": "Schemas",
-  "version": "0.0.4",
+  "name": "resolve-schema-values",
+  "description": "Resolve values based on a JSON schema. Supports conditionals and composition. Useful for configuration, preferences, LLM chat completions, etc.",
+  "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jonschlinkert/resolve-schema-values"
+  },
+  "author": {
+    "name": "Jon Schlinkert",
+    "url": "https://github.com/jonschlinkert"
+  },
   "scripts": {
     "eslint": "npx eslint --ext .ts .",
     "test": "ts-mocha -r esbuild-register 'test/**/*.ts'",
@@ -17,6 +25,10 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     },
+    "./merge": {
+      "import": "./dist/merge.mjs",
+      "require": "./dist/merge.js"
+    },
     "./resolve": {
       "import": "./dist/resolve.mjs",
       "require": "./dist/resolve.js"
@@ -26,15 +38,43 @@
       "require": "./dist/validate.js"
     }
   },
+  "dependencies": {
+    "debug": "^4.3.7"
+  },
   "devDependencies": {
     "@types/node": "^20.12.7",
+    "@typescript-eslint/eslint-plugin": "^8.12.2",
+    "@typescript-eslint/parser": "^8.12.2",
     "esbuild-register": "^3.5.0",
     "eslint": "^8.57.0",
+    "gulp-format-md": "^2.0.0",
     "prettier": "^3.3.3",
     "ts-mocha": "^10.0.0",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5"
+  },
+  "verb": {
+    "toc": false,
+    "layout": "default",
+    "tasks": [
+      "readme"
+    ],
+    "plugins": [
+      "gulp-format-md"
+    ],
+    "reflinks": [
+      "verb"
+    ],
+    "related": {
+      "list": [
+        "clone-deep",
+        "kind-of"
+      ]
+    },
+    "lint": {
+      "reflinks": true
+    }
   }
 }

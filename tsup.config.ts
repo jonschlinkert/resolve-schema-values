@@ -4,6 +4,7 @@ export default defineConfig({
   clean: true,
   entry: {
     index: 'src/index.ts',
+    merge: 'src/merge.ts',
     resolve: 'src/resolve.ts',
     validate: 'src/validate.ts'
   },

@@ -1,4 +1,5 @@
 import type { JSONSchema, ResolveOptions, ValidationError } from '~/types';
+import { log } from '~/debug';
 
 export const createError = (path: string[], message: string): ValidationError => ({
   path,
@@ -269,10 +270,74 @@ export const evaluateCondition = async (
   value: any,
   options: ResolveOptions
 ): Promise<boolean> => {
+  log('evaluateCondition START:', { schema, value, options });
+
+  // For nested property conditions (used in resolution)
+  if (schema.properties && !options.skipPropertyCheck) {
+    if (!value || typeof value !== 'object') {
+      log('evaluateCondition result: false - value is not an object');
+      return false;
+    }
+
+    // Validate each property against its schema
+    for (const [prop, condition] of Object.entries(schema.properties)) {
+      if (condition.minimum !== undefined && (
+        !value.hasOwnProperty(prop) ||
+        value[prop] < condition.minimum
+      )) {
+        log('evaluateCondition result: false - minimum validation failed', {
+          property: prop,
+          value: value[prop],
+          minimum: condition.minimum
+        });
+        return false;
+      }
+
+      if (condition.maximum !== undefined && (
+        !value.hasOwnProperty(prop) ||
+        value[prop] > condition.maximum
+      )) {
+        log('evaluateCondition result: false - maximum validation failed', {
+          property: prop,
+          value: value[prop],
+          maximum: condition.maximum
+        });
+        return false;
+      }
+
+      const propValue = value[prop];
+      const propErrors = await validateValue(propValue, condition, {
+        ...options,
+        skipValidation: true,
+        skipConditional: true, // Prevent infinite recursion
+        currentPath: [...options.currentPath || [], prop]
+      });
+
+      if (propErrors.length > 0) {
+        log('evaluateCondition result: false - property validation failed', {
+          property: prop,
+          errors: propErrors
+        });
+        return false;
+      }
+    }
+
+    log('evaluateCondition result: true - all properties valid');
+    return true;
+  }
+
+  // For direct value validation
   const errors = await validateValue(value, schema, {
     ...options,
-    skipValidation: true
+    skipValidation: true,
+    skipConditional: true
   });
+
+  log('evaluateCondition result:', {
+    isValid: errors.length === 0,
+    errors
+  });
+
   return errors.length === 0;
 };
 
@@ -295,8 +360,11 @@ export const validateValue = async (
     return errors;
   }
 
-  if (schema.if) {
-    const satisfied = await evaluateCondition(schema.if, value, options);
+  if (schema.if && !options.skipConditional) {
+    const satisfied = await evaluateCondition(schema.if, value, {
+      ...options,
+      skipPropertyCheck: false // Use direct value validation for conditions
+    });
 
     if (satisfied && schema.then) {
       const thenErrors = await validateValue(value, schema.then, options);
