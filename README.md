@@ -41,8 +41,8 @@ const schema = {
 };
 
 const data = { company: 'Sellside' };
-const resolved = resolveValues(schema, data);
-console.log(resolved); // { username: 'jonschlinkert', company: 'Sellside' }
+const result = await resolveValues(schema, data);
+console.log(result.value); // { username: 'jonschlinkert', company: 'Sellside' }
 ```
 
 **Conditional Schema Resolution**
@@ -70,8 +70,8 @@ const schema = {
 };
 
 const data = { userType: 'business' };
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // {
 //   userType: 'business',
 //   taxId: 'REQUIRED',
@@ -99,8 +99,8 @@ const schema = {
 };
 
 const data = {};
-const resolved = await resolveValues(schema, data);
-console.log(resolved); // { name: 'Unnamed', age: 0 }
+const result = await resolveValues(schema, data);
+console.log(result.value); // { name: 'Unnamed', age: 0 }
 ```
 
 **Pattern Properties**
@@ -122,8 +122,8 @@ const data = {
   otherField: undefined
 };
 
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // {
 //   field1: 'empty',
 //   field2: 'empty',
@@ -150,8 +150,8 @@ const schema = {
 };
 
 const data = { creditCard: '1234-5678-9012-3456' };
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // {
 //   creditCard: '1234-5678-9012-3456',
 //   billingAddress: 'REQUIRED',
@@ -178,8 +178,8 @@ const data = [
   { id: 2 },
   { id: 3 }
 ];
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // [
 //   { id: 1, status: 'pending' },
 //   { id: 2, status: 'pending' },
@@ -204,14 +204,18 @@ const schema = {
 };
 
 const data = { value: '123' };
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // { value: '123' }  // Validates as it matches the string pattern
 
 const invalidData = { value: 'abc' };
-const resolvedInvalid = await resolveValues(schema, invalidData);
-console.log(resolvedInvalid);
-// { value: 0 }  // Falls back to default as it matches neither schema
+const invalidResult = await resolveValues(schema, invalidData);
+if (!invalidResult.ok) {
+  console.log('Validation failed:', invalidResult.errors);
+} else {
+  console.log(invalidResult.value);
+  // { value: 0 }  // Falls back to default as it matches neither schema
+}
 ```
 
 **Additional Properties with Schema**
@@ -233,8 +237,8 @@ const data = {
   customField1: undefined,
   customField2: undefined
 };
-const resolved = await resolveValues(schema, data);
-console.log(resolved);
+const result = await resolveValues(schema, data);
+console.log(result.value);
 // {
 //   name: 'John',
 //   customField1: 'additional',
