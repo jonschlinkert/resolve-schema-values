@@ -1,7 +1,7 @@
 {
   "name": "resolve-schema-values",
   "description": "Resolve values based on a JSON schema. Supports conditionals and composition. Useful for configuration, preferences, LLM chat completions, etc.",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/jonschlinkert/resolve-schema-values"
@@ -11,6 +11,7 @@
     "url": "https://github.com/jonschlinkert"
   },
   "scripts": {
+    "prepublish": "npx tsup",
     "eslint": "npx eslint --ext .ts .",
     "test": "ts-mocha -r esbuild-register 'test/**/*.ts'",
     "tsup": "npx tsup"
