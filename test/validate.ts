@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import { validateValue, validateString, validateNumber, validateArray, validateObject, createError } from '~/validate';
 
 describe('validate', () => {
-  describe('validateString', () => {
-    it('should validate string type', () => {
+  describe('string', () => {
+    it('string type', () => {
       const schema: JSONSchema = { type: 'string' };
       assert.deepStrictEqual(validateString('test', schema, []), []);
       assert.deepStrictEqual(validateString(123, schema, []), [
@@ -12,7 +12,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate minLength', () => {
+    it('minLength', () => {
       const schema: JSONSchema = { type: 'string', minLength: 3 };
       assert.deepStrictEqual(validateString('test', schema, []), []);
       assert.deepStrictEqual(validateString('ab', schema, []), [
@@ -20,7 +20,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate maxLength', () => {
+    it('maxLength', () => {
       const schema: JSONSchema = { type: 'string', maxLength: 4 };
       assert.deepStrictEqual(validateString('test', schema, []), []);
       assert.deepStrictEqual(validateString('toolong', schema, []), [
@@ -28,43 +28,43 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate pattern', () => {
+    it('pattern', () => {
       const schema: JSONSchema = { type: 'string', pattern: '^\\d{3}$' };
       assert.deepStrictEqual(validateString('123', schema, []), []);
       assert.deepStrictEqual(validateString('abc', schema, []), [
         createError([], 'String must match pattern: ^\\d{3}$')
       ]);
     });
+  });
 
-    describe('formats', () => {
-      it('should validate date-time format', () => {
-        const schema: JSONSchema = { type: 'string', format: 'date-time' };
-        assert.deepStrictEqual(validateString('2024-01-01T12:00:00Z', schema, []), []);
-        assert.deepStrictEqual(validateString('invalid', schema, []), [
-          createError([], 'Invalid date-time format')
-        ]);
-      });
+  describe('string → formats', () => {
+    it('date-time format', () => {
+      const schema: JSONSchema = { type: 'string', format: 'date-time' };
+      assert.deepStrictEqual(validateString('2024-01-01T12:00:00Z', schema, []), []);
+      assert.deepStrictEqual(validateString('invalid', schema, []), [
+        createError([], 'Invalid date-time format')
+      ]);
+    });
 
-      it('should validate date format', () => {
-        const schema: JSONSchema = { type: 'string', format: 'date' };
-        assert.deepStrictEqual(validateString('2024-01-01', schema, []), []);
-        assert.deepStrictEqual(validateString('2024/01/01', schema, []), [
-          createError([], 'Invalid date format')
-        ]);
-      });
+    it('date format', () => {
+      const schema: JSONSchema = { type: 'string', format: 'date' };
+      assert.deepStrictEqual(validateString('2024-01-01', schema, []), []);
+      assert.deepStrictEqual(validateString('2024/01/01', schema, []), [
+        createError([], 'Invalid date format')
+      ]);
+    });
 
-      it('should validate email format', () => {
-        const schema: JSONSchema = { type: 'string', format: 'email' };
-        assert.deepStrictEqual(validateString('test@example.com', schema, []), []);
-        assert.deepStrictEqual(validateString('invalid-email', schema, []), [
-          createError([], 'Invalid email format')
-        ]);
-      });
+    it('email format', () => {
+      const schema: JSONSchema = { type: 'string', format: 'email' };
+      assert.deepStrictEqual(validateString('test@example.com', schema, []), []);
+      assert.deepStrictEqual(validateString('invalid-email', schema, []), [
+        createError([], 'Invalid email format')
+      ]);
     });
   });
 
-  describe('validateNumber', () => {
-    it('should validate number type', () => {
+  describe('number', () => {
+    it('number type', () => {
       const schema: JSONSchema = { type: 'number' };
       assert.deepStrictEqual(validateNumber(123, schema, []), []);
       assert.deepStrictEqual(validateNumber('123', schema, []), [
@@ -72,7 +72,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate integer type', () => {
+    it('integer type', () => {
       const schema: JSONSchema = { type: 'integer' };
       assert.deepStrictEqual(validateNumber(123, schema, []), []);
       assert.deepStrictEqual(validateNumber(123.45, schema, []), [
@@ -80,7 +80,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate minimum', () => {
+    it('minimum', () => {
       const schema: JSONSchema = { type: 'number', minimum: 10 };
       assert.deepStrictEqual(validateNumber(15, schema, []), []);
       assert.deepStrictEqual(validateNumber(5, schema, []), [
@@ -88,7 +88,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate maximum', () => {
+    it('maximum', () => {
       const schema: JSONSchema = { type: 'number', maximum: 10 };
       assert.deepStrictEqual(validateNumber(5, schema, []), []);
       assert.deepStrictEqual(validateNumber(15, schema, []), [
@@ -96,7 +96,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate multipleOf', () => {
+    it('multipleOf', () => {
       const schema: JSONSchema = { type: 'number', multipleOf: 5 };
       assert.deepStrictEqual(validateNumber(15, schema, []), []);
       assert.deepStrictEqual(validateNumber(17, schema, []), [
@@ -105,8 +105,8 @@ describe('validate', () => {
     });
   });
 
-  describe('validateArray', () => {
-    it('should validate array type', async () => {
+  describe('array', () => {
+    it('array type', async () => {
       const schema: JSONSchema = { type: 'array' };
       assert.deepStrictEqual(await validateArray([], schema, {}), []);
       assert.deepStrictEqual(await validateArray('not-array', schema, {}), [
@@ -114,7 +114,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate minItems', async () => {
+    it('minItems', async () => {
       const schema: JSONSchema = { type: 'array', minItems: 2 };
       assert.deepStrictEqual(await validateArray([1, 2], schema, {}), []);
       assert.deepStrictEqual(await validateArray([1], schema, {}), [
@@ -122,7 +122,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate maxItems', async () => {
+    it('maxItems', async () => {
       const schema: JSONSchema = { type: 'array', maxItems: 2 };
       assert.deepStrictEqual(await validateArray([1, 2], schema, {}), []);
       assert.deepStrictEqual(await validateArray([1, 2, 3], schema, {}), [
@@ -130,7 +130,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate uniqueItems', async () => {
+    it('uniqueItems', async () => {
       const schema: JSONSchema = { type: 'array', uniqueItems: true };
       assert.deepStrictEqual(await validateArray([1, 2, 3], schema, {}), []);
       assert.deepStrictEqual(await validateArray([1, 2, 2], schema, {}), [
@@ -138,7 +138,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate items schema', async () => {
+    it('items schema', async () => {
       const schema: JSONSchema = {
         type: 'array',
         items: { type: 'number', minimum: 0 }
@@ -150,8 +150,8 @@ describe('validate', () => {
     });
   });
 
-  describe('validateObject', () => {
-    it('should validate object type', async () => {
+  describe('object', () => {
+    it('object type', async () => {
       const schema: JSONSchema = { type: 'object' };
       assert.deepStrictEqual(await validateObject({}, schema, {}), []);
       assert.deepStrictEqual(await validateObject('not-object', schema, {}), [
@@ -159,7 +159,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate required properties', async () => {
+    it('required properties', async () => {
       const schema: JSONSchema = {
         type: 'object',
         required: ['name']
@@ -170,7 +170,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate property schemas', async () => {
+    it('property schemas', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -183,7 +183,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate minProperties', async () => {
+    it('minProperties', async () => {
       const schema: JSONSchema = { type: 'object', minProperties: 2 };
       assert.deepStrictEqual(await validateObject({ a: 1, b: 2 }, schema, {}), []);
       assert.deepStrictEqual(await validateObject({ a: 1 }, schema, {}), [
@@ -191,7 +191,7 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate maxProperties', async () => {
+    it('maxProperties', async () => {
       const schema: JSONSchema = { type: 'object', maxProperties: 2 };
       assert.deepStrictEqual(await validateObject({ a: 1, b: 2 }, schema, {}), []);
       assert.deepStrictEqual(await validateObject({ a: 1, b: 2, c: 3 }, schema, {}), [
@@ -200,8 +200,8 @@ describe('validate', () => {
     });
   });
 
-  describe('validateValue', () => {
-    it('should validate const values', async () => {
+  describe('values', () => {
+    it('const values', async () => {
       const schema: JSONSchema = { const: 42 };
       assert.deepStrictEqual(await validateValue(42, schema), []);
       assert.deepStrictEqual(await validateValue(41, schema), [
@@ -209,123 +209,123 @@ describe('validate', () => {
       ]);
     });
 
-    it('should validate enum values', async () => {
+    it('enum values', async () => {
       const schema: JSONSchema = { enum: ['red', 'green', 'blue'] };
       assert.deepStrictEqual(await validateValue('red', schema), []);
       assert.deepStrictEqual(await validateValue('yellow', schema), [
         createError([], 'Value must be one of: red, green, blue')
       ]);
     });
+  });
 
-    describe('conditional validation', () => {
-      it('should validate if/then conditions', async () => {
-        const schema: JSONSchema = {
+  describe('conditionals', () => {
+    it('if/then conditions', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        if: {
           type: 'object',
-          if: {
-            type: 'object',
-            properties: {
-              type: { const: 'number' }
-            },
-            required: ['type']
+          properties: {
+            type: { const: 'number' }
           },
-          then: {
-            type: 'object',
-            properties: {
-              value: { type: 'number' }
-            },
-            required: ['value']
-          }
-        };
-
-        assert.deepStrictEqual(
-          await validateValue({ type: 'number', value: 42 }, schema),
-          []
-        );
-
-        assert.deepStrictEqual(
-          await validateValue({ type: 'number', value: 'not-number' }, schema),
-          [createError(['value'], 'Value must be a number')]
-        );
-      });
-
-      it('should validate if/else conditions', async () => {
-        const schema: JSONSchema = {
+          required: ['type']
+        },
+        then: {
           type: 'object',
-          if: {
-            type: 'object',
-            properties: {
-              type: { const: 'number' }
-            },
-            required: ['type']
+          properties: {
+            value: { type: 'number' }
           },
-          else: {
-            type: 'object',
-            properties: {
-              value: { type: 'string' }
-            },
-            required: ['value']
-          }
-        };
+          required: ['value']
+        }
+      };
 
-        assert.deepStrictEqual(
-          await validateValue({ type: 'string', value: 'test' }, schema),
-          []
-        );
+      assert.deepStrictEqual(
+        await validateValue({ type: 'number', value: 42 }, schema),
+        []
+      );
 
-        assert.deepStrictEqual(
-          await validateValue({ type: 'string', value: 42 }, schema),
-          [createError(['value'], 'Value must be a string')]
-        );
-      });
+      assert.deepStrictEqual(
+        await validateValue({ type: 'number', value: 'not-number' }, schema),
+        [createError(['value'], 'Value must be a number')]
+      );
     });
 
-    describe('composition', () => {
-      it('should validate allOf', async () => {
-        const schema: JSONSchema = {
-          allOf: [
-            { type: 'number', minimum: 0 },
-            { type: 'number', maximum: 100 }
-          ]
-        };
+    it('if/else conditions', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        if: {
+          type: 'object',
+          properties: {
+            type: { const: 'number' }
+          },
+          required: ['type']
+        },
+        else: {
+          type: 'object',
+          properties: {
+            value: { type: 'string' }
+          },
+          required: ['value']
+        }
+      };
 
-        assert.deepStrictEqual(await validateValue(50, schema), []);
-        assert.deepStrictEqual(await validateValue(-1, schema), [
-          createError([], 'Value must be >= 0')
-        ]);
-        assert.deepStrictEqual(await validateValue(101, schema), [
-          createError([], 'Value must be <= 100')
-        ]);
-      });
+      assert.deepStrictEqual(
+        await validateValue({ type: 'string', value: 'test' }, schema),
+        []
+      );
 
-      it('should validate anyOf', async () => {
-        const schema: JSONSchema = {
-          anyOf: [
-            { type: 'number' },
-            { type: 'string' }
-          ]
-        };
+      assert.deepStrictEqual(
+        await validateValue({ type: 'string', value: 42 }, schema),
+        [createError(['value'], 'Value must be a string')]
+      );
+    });
+  });
 
-        assert.deepStrictEqual(await validateValue(42, schema), []);
-        assert.deepStrictEqual(await validateValue('test', schema), []);
-        assert.deepStrictEqual(await validateValue(true, schema), [
-          createError([], 'Value must match at least one schema in anyOf')
-        ]);
-      });
+  describe('composition', () => {
+    it('allOf', async () => {
+      const schema: JSONSchema = {
+        allOf: [
+          { type: 'number', minimum: 0 },
+          { type: 'number', maximum: 100 }
+        ]
+      };
 
-      it('should validate oneOf', async () => {
-        const schema: JSONSchema = {
-          oneOf: [
-            { type: 'number', minimum: 0 },
-            { type: 'number', maximum: 0 }
-          ]
-        };
+      assert.deepStrictEqual(await validateValue(50, schema), []);
+      assert.deepStrictEqual(await validateValue(-1, schema), [
+        createError([], 'Value must be >= 0')
+      ]);
+      assert.deepStrictEqual(await validateValue(101, schema), [
+        createError([], 'Value must be <= 100')
+      ]);
+    });
 
-        assert.deepStrictEqual(await validateValue(1, schema), []);
-        assert.deepStrictEqual(await validateValue(-1, schema), []);
-        assert.deepStrictEqual(await validateValue(0, schema), [
-          createError([], 'Value must match exactly one schema in oneOf')
-        ]);
-      });
+    it('anyOf', async () => {
+      const schema: JSONSchema = {
+        anyOf: [
+          { type: 'number' },
+          { type: 'string' }
+        ]
+      };
+
+      assert.deepStrictEqual(await validateValue(42, schema), []);
+      assert.deepStrictEqual(await validateValue('test', schema), []);
+      assert.deepStrictEqual(await validateValue(true, schema), [
+        createError([], 'Value must match at least one schema in anyOf')
+      ]);
+    });
+
+    it('oneOf', async () => {
+      const schema: JSONSchema = {
+        oneOf: [
+          { type: 'number', minimum: 0 },
+          { type: 'number', maximum: 0 }
+        ]
+      };
+
+      assert.deepStrictEqual(await validateValue(1, schema), []);
+      assert.deepStrictEqual(await validateValue(-1, schema), []);
+      assert.deepStrictEqual(await validateValue(0, schema), [
+        createError([], 'Value must match exactly one schema in oneOf')
+      ]);
     });
   });
 });

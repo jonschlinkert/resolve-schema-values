@@ -1,173 +1,284 @@
 import type { JSONSchema, ResolveOptions } from '~/types';
 import { evaluateCondition, validateValue } from '~/validate';
-import { log } from '~/debug';
 
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-export const resolveNull = (schema: JSONSchema, value: any): null => {
-  log.value('resolveNull:', { schema, value });
-  if (value !== null) {
-    return schema.default !== undefined ? schema.default : null;
+interface ValidationError {
+  message: string;
+  path?: string[];
+}
+
+interface Success<T> {
+  ok: true;
+  value: T;
+}
+
+interface Failure {
+  ok: false;
+  errors: ValidationError[];
+}
+
+type Result<T> = Success<T> | Failure;
+
+const success = <T>(value: T): Success<T> => ({
+  ok: true,
+  value
+});
+
+const failure = (errors: ValidationError[]): Failure => ({
+  ok: false,
+  errors
+});
+
+export const resolveNull = (schema: JSONSchema, value: any): Result<null> => {
+  const errors: ValidationError[] = [];
+
+  if (value !== undefined && value !== null) {
+    errors.push({ message: 'Value must be null' });
+    return failure(errors);
   }
-  return null;
+
+  return success(null);
 };
 
-export const resolveBoolean = (schema: JSONSchema, value: any): boolean => {
-  log.value('resolveBoolean:', { schema, value });
+export const resolveBoolean = (schema: JSONSchema, value: any): Result<boolean> => {
+  const errors: ValidationError[] = [];
+
+  if (value === undefined || value === null) {
+    return success(schema.default !== undefined ? schema.default : false);
+  }
+
   if (typeof value !== 'boolean') {
-    return schema.default !== undefined ? schema.default : false;
+    errors.push({ message: 'Value must be a boolean' });
+    return failure(errors);
   }
-  return value;
+
+  return success(value);
 };
 
-export const resolveInteger = (schema: JSONSchema, value: any): number => {
-  log.value('resolveInteger:', { schema, value });
-  if (schema.type === 'integer' && !Number.isInteger(value)) {
-    return schema.default !== undefined ? schema.default : Math.floor(value);
-  }
-  return value;
-};
+export const resolveInteger = (schema: JSONSchema, value: any): Result<number> => {
+  const errors: ValidationError[] = [];
 
-export const resolveNumber = (schema: JSONSchema, value: any): number => {
-  log.value('resolveNumber:', { schema, value });
+  if (value === undefined || value === null) {
+    return success(schema.default !== undefined ? schema.default : 0);
+  }
+
   if (typeof value !== 'number') {
-    return schema.default !== undefined ? schema.default : 0;
+    errors.push({ message: 'Value must be a number' });
   }
-  return value;
+
+  if (schema.type === 'integer' && !Number.isInteger(value)) {
+    errors.push({ message: 'Value must be an integer' });
+  }
+
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    errors.push({ message: `Value must be >= ${schema.minimum}` });
+  }
+
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    errors.push({ message: `Value must be <= ${schema.maximum}` });
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(value);
 };
 
-export const resolveString = (schema: JSONSchema, value: any): string => {
-  log.value('resolveString:', { schema, value });
-  if (typeof value !== 'string') {
-    return schema.default !== undefined ? schema.default : '';
+export const resolveNumber = (schema: JSONSchema, value: any): Result<number> => {
+  const errors: ValidationError[] = [];
+
+  if (value === undefined || value === null) {
+    return success(schema.default !== undefined ? schema.default : 0);
   }
-  return value;
+
+  if (typeof value !== 'number') {
+    errors.push({ message: 'Value must be a number' });
+  }
+
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    errors.push({ message: `Value must be >= ${schema.minimum}` });
+  }
+
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    errors.push({ message: `Value must be <= ${schema.maximum}` });
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(value);
+};
+
+export const resolveString = (schema: JSONSchema, value: any): Result<string> => {
+  const errors: ValidationError[] = [];
+
+  if ((value === undefined || value === null) && schema.default !== undefined) {
+    return success(schema.default);
+  }
+
+  if (typeof value !== 'string') {
+    errors.push({ message: 'Value must be a string' });
+  }
+
+  if (schema.minLength !== undefined && value?.length < schema.minLength) {
+    errors.push({ message: `String length must be >= ${schema.minLength}` });
+  }
+
+  if (schema.maxLength !== undefined && value?.length > schema.maxLength) {
+    errors.push({ message: `String length must be <= ${schema.maxLength}` });
+  }
+
+  if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+    errors.push({ message: `String must match pattern: ${schema.pattern}` });
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(value);
 };
 
 export const resolveConditional = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log.cond('(start):', {
-    ifSchema: schema.if,
-    thenSchema: schema.then,
-    elseSchema: schema.else,
-    value
-  });
-
+): Promise<Result<any>> => {
   if (!schema.if) {
-    log.cond('No if condition found');
-    return value;
+    return success(value);
   }
 
   const isSatisfied = await evaluateCondition(schema.if, value, options);
   const targetSchema = isSatisfied ? schema.then : schema.else;
-  log.cond('Condition evaluation (result):', { isSatisfied });
 
-  log.cond('flow:', {
-    isSatisfied,
-    targetSchema,
-    valueBeforeResolve: value
-  });
-
-  if (targetSchema) {
-    if (targetSchema.properties) {
-      // Resolve properties defined in the conditional schema
-      const resolvedProperties = await resolveObjectProperties(targetSchema.properties, value, options);
-      log.cond('properties resolved:', {
-        resolvedProperties,
-        originalValue: value
-      });
-
-      return { ...value, ...resolvedProperties };
-    }
-
-    // Handle other aspects of the schema
-    const resolved = await resolveValues(targetSchema, value, options);
-    return { ...value, ...resolved };
+  if (!targetSchema) {
+    return success(value);
   }
 
-  return value;
+  if (targetSchema.properties) {
+    const resolvedProperties = await resolveObjectProperties(targetSchema.properties, value, options);
+    if (!resolvedProperties.ok) {
+      return resolvedProperties;
+    }
+    return success({ ...value, ...resolvedProperties.value });
+  }
+
+  const resolved = await resolveValues(targetSchema, value, options);
+  if (!resolved.ok) {
+    return resolved;
+  }
+
+  if (targetSchema.required?.length > 0) {
+    const missing = targetSchema.required.filter(prop => !(prop in resolved.value));
+    if (missing.length > 0) {
+      return failure(missing.map(prop => ({ message: `Missing required property: ${prop}` })));
+    }
+  }
+
+  return success({ ...value, ...resolved.value });
 };
 
 export const resolveAllOf = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log.comp('Resolving allOf');
+): Promise<Result<any>> => {
   let result = {};
+  const errors: ValidationError[] = [];
+
   for (const subSchema of schema.allOf) {
-    // First, resolve any properties and their defaults from the subschema
     if (subSchema.properties) {
       const resolvedProperties = await resolveObjectProperties(subSchema.properties, value, options);
-      result = { ...result, ...resolvedProperties };
+      if (!resolvedProperties.ok) {
+        errors.push(...resolvedProperties.errors);
+      } else {
+        result = { ...result, ...resolvedProperties.value };
+      }
     }
 
-    // Then resolve any other aspects of the subschema
     const resolved = await resolveValues(subSchema, { ...value, ...result }, options);
-    result = { ...result, ...resolved };
+    if (!resolved.ok) {
+      errors.push(...resolved.errors);
+    } else {
+      result = { ...result, ...resolved.value };
+    }
   }
-  log.comp('allOf (result):', result);
-  return result;
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  // if (schema.required) {
+  //   const missing = schema.required.filter(prop => !(prop in result));
+  //   if (missing.length > 0) {
+  //     return failure(missing.map(prop => ({ message: `Missing required property: ${prop}` })));
+  //   }
+  // }
+
+  return success(result);
 };
 
 export const resolveAnyOf = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log.comp('Processing anyOf');
+): Promise<Result<any>> => {
+  const errors: ValidationError[] = [];
+
   for (const subSchema of schema.anyOf) {
-    try {
-      const isValid = (await validateValue(value, subSchema, options)).length === 0;
-      if (isValid) {
-        log.comp('anyOf found valid schema:', { value });
-        return value;
-      }
-    } catch {
-      continue;
+    const validation = await validateValue(value, subSchema, options);
+    if (validation.length === 0) {
+      return success(value);
     }
+
+    errors.push(...validation.map(err => ({ message: err.message, path: err.path })));
   }
 
-  log.comp('anyOf using default:', schema.default);
-  return schema.default;
+  if (schema.default !== undefined) {
+    return success(schema.default);
+  }
+
+  return failure(errors);
 };
 
 export const resolveOneOf = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log.comp('Processing oneOf');
-
+): Promise<Result<any>> => {
   let validCount = 0;
   let validResult = null;
+  const errors: ValidationError[] = [];
 
   for (const subSchema of schema.oneOf) {
-    try {
-      const errors = await validateValue(value, { ...subSchema }, options);
-      if (errors.length === 0) {
-        validCount++;
-        validResult = value;
-      }
-    } catch {
-      continue;
+    const validation = await validateValue(value, subSchema, options);
+    if (validation.length === 0) {
+      validCount++;
+      validResult = value;
+    } else {
+      errors.push(...validation.map(err => ({ message: err.message, path: err.path })));
     }
   }
 
-  log.comp('oneOf (result):', { validCount, validResult });
-  return validCount === 1 ? validResult : schema.default;
+  if (validCount !== 1) {
+    if (schema.default !== undefined) {
+      return success(schema.default);
+    }
+
+    return failure(errors);
+  }
+
+  return success(validResult);
 };
 
 export const resolveComposition = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log.comp('resolveComposition (start):', { schema, value, options });
-
+): Promise<Result<any>> => {
   if (schema.allOf) {
     return resolveAllOf(schema, value, options);
   }
@@ -180,23 +291,37 @@ export const resolveComposition = async (
     return resolveOneOf(schema, value, options);
   }
 
-  return value;
+  return success(value);
 };
 
 export const resolveObjectProperties = async (
   properties: Record<string, JSONSchema>,
   value: any,
   options: ResolveOptions
-): Promise<Record<string, any>> => {
-  log.obj('resolveObjectProperties (start):', { properties, value, options });
+): Promise<Result<Record<string, any>>> => {
   const result: Record<string, any> = {};
+  const errors: ValidationError[] = [];
 
   for (const [key, propSchema] of Object.entries(properties)) {
-    result[key] = await resolveValues(propSchema, value?.[key], options);
+    const resolved = await resolveValues(propSchema, value?.[key], options);
+
+    if (!resolved.ok) {
+      for (const error of resolved.errors) {
+        errors.push({
+          message: error.message,
+          path: error.path ? [key, ...error.path] : [key]
+        });
+      }
+    } else {
+      result[key] = resolved.value;
+    }
   }
 
-  log.obj('resolveObjectProperties (result):', result);
-  return result;
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(result);
 };
 
 export const resolveDependentSchemas = async (
@@ -204,37 +329,46 @@ export const resolveDependentSchemas = async (
   value: any,
   result: Record<string, any>,
   options: ResolveOptions
-): Promise<Record<string, any>> => {
-  log.obj('resolveDependentSchemas (start):', { schema, value, result, options });
-
+): Promise<Result<Record<string, any>>> => {
   if (!schema.dependentSchemas) {
-    return result;
+    return success(result);
   }
 
   let newResult = { ...result };
+  const errors: ValidationError[] = [];
 
   if (value) {
     for (const [prop, dependentSchema] of Object.entries(schema.dependentSchemas)) {
       if (value[prop] !== undefined) {
-        // First resolve any properties defined in the dependent schema
         if (dependentSchema.properties) {
           const resolvedProperties = await resolveObjectProperties(
             dependentSchema.properties,
             value,
             options
           );
-          newResult = { ...newResult, ...resolvedProperties };
+
+          if (!resolvedProperties.ok) {
+            errors.push(...resolvedProperties.errors);
+          } else {
+            newResult = { ...newResult, ...resolvedProperties.value };
+          }
         }
 
-        // Then resolve any other aspects of the dependent schema
         const resolvedDependent = await resolveValues(dependentSchema, newResult, options);
-        newResult = { ...newResult, ...resolvedDependent };
+        if (!resolvedDependent.ok) {
+          errors.push(...resolvedDependent.errors);
+        } else {
+          newResult = { ...newResult, ...resolvedDependent.value };
+        }
       }
     }
   }
 
-  log.obj('resolveDependentSchemas (result):', newResult);
-  return newResult;
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(newResult);
 };
 
 export const resolvePatternProperties = async (
@@ -242,27 +376,39 @@ export const resolvePatternProperties = async (
   value: any,
   result: Record<string, any>,
   options: ResolveOptions
-): Promise<Record<string, any>> => {
-  log.obj('resolvePatternProperties (start):', { schema, value, result, options });
-
+): Promise<Result<Record<string, any>>> => {
   if (!schema.patternProperties) {
-    return result;
+    return success(result);
   }
 
   const newResult = { ...result };
+  const errors: ValidationError[] = [];
 
-  for (const [pattern, prop] of Object.entries(schema.patternProperties)) {
+  for (const [pattern, propSchema] of Object.entries(schema.patternProperties)) {
     const regex = new RegExp(pattern);
 
-    for (const [k, v] of Object.entries(prop)) {
-      if (regex.test(k) && !(k in newResult)) {
-        newResult[k] = await resolveValues(prop, v, options);
+    for (const [key, val] of Object.entries(value)) {
+      if (regex.test(key) && !(key in newResult)) {
+        const resolved = await resolveValues(propSchema, val, options);
+        if (!resolved.ok) {
+          for (const error of resolved.errors) {
+            errors.push({
+              message: error.message,
+              path: error.path ? [key, ...error.path] : [key]
+            });
+          }
+        } else {
+          newResult[key] = resolved.value;
+        }
       }
     }
   }
 
-  log.obj('resolvePatternProperties (result):', newResult);
-  return newResult;
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(newResult);
 };
 
 export const resolveAdditionalProperties = async (
@@ -270,43 +416,71 @@ export const resolveAdditionalProperties = async (
   value: any,
   result: Record<string, any>,
   options: ResolveOptions
-): Promise<Record<string, any>> => {
-  log.obj('resolveAdditionalProperties (start):', { schema, value, result, options });
-
+): Promise<Result<Record<string, any>>> => {
   if (schema.additionalProperties === false) {
-    return result;
+    return success(result);
   }
 
   const newResult = { ...result };
+  const errors: ValidationError[] = [];
 
-  for (const key in value) {
+  for (const [key, val] of Object.entries(value)) {
     if (!newResult.hasOwnProperty(key)) {
       if (typeof schema.additionalProperties === 'object') {
-        newResult[key] = await resolveValues(
-          schema.additionalProperties,
-          value[key],
-          options
-        );
+        const resolved = await resolveValues(schema.additionalProperties, val, options);
+        if (!resolved.ok) {
+          for (const error of resolved.errors) {
+            errors.push({
+              message: error.message,
+              path: error.path ? [key, ...error.path] : [key]
+            });
+          }
+        } else {
+          newResult[key] = resolved.value;
+        }
       } else {
-        newResult[key] = value[key];
+        newResult[key] = val;
       }
     }
   }
 
-  log.obj('resolveAdditionalProperties (result):', newResult);
-  return newResult;
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(newResult);
 };
 
 export const resolveArray = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any[]> => {
-  log('resolveArray (start):', { schema, value, options });
+): Promise<Result<any[]>> => {
+  const errors: ValidationError[] = [];
 
   if (!Array.isArray(value)) {
-    return schema.default !== undefined ? schema.default : [];
+    if (value === undefined || value === null) {
+      return success(schema.default !== undefined ? schema.default : []);
+    }
+    errors.push({ message: 'Value must be an array' });
   }
+
+  if (schema.minItems !== undefined && value.length < schema.minItems) {
+    errors.push({ message: `Array length must be >= ${schema.minItems}` });
+  }
+
+  if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+    errors.push({ message: `Array length must be <= ${schema.maxItems}` });
+  }
+
+  if (schema.uniqueItems && new Set(value).size !== value.length) {
+    errors.push({ message: 'Array items must be unique' });
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
   return resolveArrayItems(schema, value, options);
 };
 
@@ -314,137 +488,177 @@ export const resolveArrayItems = async (
   schema: JSONSchema,
   values: any[],
   options: ResolveOptions
-): Promise<any[]> => {
-  log('resolveArrayItems (start):', { schema, values, options });
-
+): Promise<Result<any[]>> => {
   if (!schema.items) {
-    return values;
+    return success(values);
   }
 
   const result = [];
-  for (const item of values) {
-    result.push(await resolveValues(schema.items, item, options));
+  const errors: ValidationError[] = [];
+
+  for (let i = 0; i < values.length; i++) {
+    const resolved = await resolveValues(schema.items, values[i], options);
+    if (!resolved.ok) {
+      for (const error of resolved.errors) {
+        errors.push({
+          message: error.message,
+          path: error.path ? [i.toString(), ...error.path] : [i.toString()]
+        });
+      }
+    } else {
+      result.push(resolved.value);
+    }
   }
 
-  log('resolveArrayItems (result):', result);
-  return result;
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(result);
 };
 
 export const resolveObject = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions
-): Promise<any> => {
-  log('resolveObject (start):', {
-    schema,
-    value,
-    hasProperties: Boolean(schema.properties)
-  });
+): Promise<Result<any>> => {
+  const errors: ValidationError[] = [];
 
   if (!isObject(value)) {
-    const defaultValue = schema.default !== undefined ? schema.default : {};
-    log('Not an object, using default:', defaultValue);
-    return defaultValue;
+    if (value === undefined || value === null) {
+      return success(schema.default !== undefined ? schema.default : {});
+    }
+
+    errors.push({ message: 'Value must be an object' });
   }
 
-  let result = value; // Start with the original value
+  if (schema.required) {
+    for (const prop of schema.required) {
+      if (!(prop in value)) {
+        errors.push({ message: `Missing required property: ${prop}`, path: [prop] });
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  let result = value;
 
   if (schema.properties) {
-    log('Processing schema properties:', schema.properties);
     const resolvedProperties = await resolveObjectProperties(schema.properties, value, options);
-    result = { ...result, ...resolvedProperties };
-    log('After resolving properties:', result);
+    if (!resolvedProperties.ok) {
+      return resolvedProperties;
+    }
+
+    result = { ...result, ...resolvedProperties.value };
   }
 
-  result = await resolveDependentSchemas(schema, value, result, options);
-  result = await resolvePatternProperties(schema, value, result, options);
-  result = await resolveAdditionalProperties(schema, value, result, options);
+  const dependentResult = await resolveDependentSchemas(schema, value, result, options);
+  if (!dependentResult.ok) {
+    return dependentResult;
+  }
 
-  log('Final object (result):', result);
-  return result;
+  result = dependentResult.value;
+
+  const patternResult = await resolvePatternProperties(schema, value, result, options);
+  if (!patternResult.ok) {
+    return patternResult;
+  }
+
+  result = patternResult.value;
+
+  const additionalResult = await resolveAdditionalProperties(schema, value, result, options);
+  if (!additionalResult.ok) {
+    return additionalResult;
+  }
+
+  result = additionalResult.value;
+  return success(result);
 };
 
 export const resolveValue = async (
   schema: JSONSchema,
   value: any,
   options: ResolveOptions = {}
-): Promise<any> => {
-  log.value('resolveValue (start):', { schema, value, options });
+): Promise<Result<any>> => {
+  const errors: ValidationError[] = [];
 
-  if (value == null) {
-    const result = schema.default !== undefined ? schema.default : null;
-    log.value('resolveValue null (result):', result);
-    return result;
+  if (schema.oneOf || schema.anyOf || schema.allOf) {
+    return resolveComposition(schema, value, options);
   }
 
-  if (schema.const !== undefined) {
-    log.value('resolveValue const (result):', schema.const);
-    return schema.const;
+  if (value === undefined || value === null) {
+    return success(schema.default ?? schema.const ?? value);
   }
 
-  if (schema.enum !== undefined) {
-    const result = schema.enum.includes(value) ? value : schema.default;
-    log.value('resolveValue enum (result):', result);
-    return result;
+  if (schema.const !== undefined && value !== schema.const) {
+    errors.push({ message: `Value must be ${schema.const}` });
   }
 
-  log.value('resolveValue final (result):', value);
-  return value;
+  if (schema.enum !== undefined && !schema.enum.includes(value)) {
+    errors.push({ message: `Value must be one of: ${schema.enum.join(', ')}` });
+  }
+
+  if (errors.length > 0) {
+    return failure(errors);
+  }
+
+  return success(value);
 };
 
 export const resolveValues = async (
   schema: JSONSchema,
-  values: any = {},
+  values: any,
   options: ResolveOptions = {}
-): Promise<any> => {
-  log('resolveValues (start):', { schema, values, options });
-
+): Promise<Result<any>> => {
   let result = values;
 
-  // First resolve basic value (const, enum, default)
-  result = await resolveValue(schema, result, options);
-  log('After resolveValue:', { result });
-
-  // Then apply conditional logic
-  result = await resolveConditional(schema, result, options);
-  log('After resolveConditional:', { result });
-
-  // Then apply composition rules
-  result = await resolveComposition(schema, result, options);
-  log('After resolveComposition:', { result });
-
-  log('Before type-specific resolution:', { type: schema.type, result });
-
-  // Finally apply type-specific resolution
-  if (schema.type) {
-    switch (schema.type) {
-      case 'null':
-        result = resolveNull(schema, result);
-        break;
-      case 'array':
-        result = await resolveArray(schema, result, options);
-        break;
-      case 'boolean':
-        result = resolveBoolean(schema, result);
-        break;
-      case 'integer':
-        result = resolveInteger(schema, result);
-        break;
-      case 'number':
-        result = resolveNumber(schema, result);
-        break;
-      case 'object':
-        result = await resolveObject(schema, result, options);
-        break;
-      case 'string':
-        result = resolveString(schema, result);
-        break;
-      default: {
-        break;
-      }
-    }
+  const valueResult = await resolveValue(schema, result, options);
+  if (!valueResult.ok) {
+    return valueResult;
   }
 
-  log('resolveValues final (result):', { result });
-  return result;
+  result = valueResult.value;
+
+  if (isObject(result)) {
+    const conditionalResult = await resolveConditional(schema, result, options);
+    if (!conditionalResult.ok) {
+      return conditionalResult;
+    }
+
+    result = conditionalResult.value;
+
+    const compositionResult = await resolveComposition(schema, result, options);
+    if (!compositionResult.ok) {
+      return compositionResult;
+    }
+
+    result = compositionResult.value;
+  }
+
+  if (!schema.type) {
+    return success(result);
+  }
+
+  switch (schema.type) {
+    case 'null':
+      return resolveNull(schema, result);
+    case 'array':
+      return resolveArray(schema, result, options);
+    case 'boolean':
+      return resolveBoolean(schema, result);
+    case 'integer':
+      return resolveInteger(schema, result);
+    case 'number':
+      return resolveNumber(schema, result);
+    case 'object':
+      return resolveObject(schema, result, options);
+    case 'string':
+      return resolveString(schema, result);
+    default: {
+      return failure([{ message: `Unsupported type: ${schema.type}` }]);
+    }
+  }
 };
