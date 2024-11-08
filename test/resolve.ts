@@ -20,18 +20,89 @@ describe('resolve', () => {
       assert.strictEqual(result.errors[0].message, 'Missing required property: something');
     });
 
-    it('should ignore required names that are invalid', async () => {
+    it('should validate missing required properties', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
-          something: { type: 'string', minLength: 1 },
+          something: { type: 'string' },
           other: { type: 'string' }
         },
-        required: ['required', 'foo']
+        required: ['something']
       };
 
       const result = await resolveValues(schema, {});
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+      assert.strictEqual(result.errors[0].message, 'Missing required property: something');
+    });
+
+    it('should validate nested missing required properties', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'object',
+            required: ['nonexistent_prop']
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, { steps: {} });
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+      assert.strictEqual(result.errors[0].message, 'Missing required property: nonexistent_prop');
+    });
+
+    it('should not ignore required names when no properties exist', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        required: ['foo', 'bar']
+      };
+
+      const result = await resolveValues(schema, {});
+      assert.ok(!result.ok);
+    });
+
+    it('should ignore required names on items when no items are passed', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'name']
+        }
+      };
+
+      const result = await resolveValues(schema);
       assert.ok(result.ok);
+    });
+
+    it('should not ignore required names on items', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'name']
+        }
+      };
+
+      const result = await resolveValues(schema, [{}]);
+      assert.ok(!result.ok);
+      assert.equal(result.errors[0].message, 'Missing required property: id');
+      assert.equal(result.errors[1].message, 'Missing required property: name');
+    });
+
+    it('should throw an error when "items" value is not an array', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'name']
+        }
+      };
+
+      const result = await resolveValues(schema, {});
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors[0].message, 'Value must be an array');
     });
 
     it('should use default value on required properties without an error', async () => {
@@ -462,14 +533,14 @@ describe('resolve', () => {
           tags: {
             type: 'array',
             items: { type: 'string', minLength: 2 },
-            default: ['default']
+            default: ['foo', 'bar', 'baz']
           }
         }
       };
 
       const result = await resolveValues(schema, {});
       assert.ok(result.ok);
-      assert.deepStrictEqual(result.value.tags, ['default']);
+      assert.deepStrictEqual(result.value.tags, ['foo', 'bar', 'baz']);
     });
 
     it('should handle array constraints', async () => {
@@ -1024,4 +1095,296 @@ describe('resolve', () => {
       assert.strictEqual(minor.value.canVote, false);
     });
   });
+
+  describe('multiple types', () => {
+    describe('basic type validation', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          value: {
+            type: ['string', 'number']
+          }
+        }
+      };
+
+      it('should accept string values', async () => {
+        const result = await resolveValues(schema, {
+          value: 'hello'
+        });
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.value, 'hello');
+      });
+
+      it('should accept number values', async () => {
+        const result = await resolveValues(schema, {
+          value: 42
+        });
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.value, 42);
+      });
+
+      it('should reject invalid types', async () => {
+        const result = await resolveValues(schema, { value: true });
+        assert.ok(!result.ok);
+        assert.strictEqual(result.errors.length, 1);
+      });
+    });
+
+    describe('type-specific constraints', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          value: {
+            type: ['string', 'number'],
+            minLength: 2,
+            minimum: 10
+          }
+        }
+      };
+
+      it('should validate string constraints', async () => {
+        const shortString = await resolveValues(schema, { value: 'a' });
+        assert.ok(!shortString.ok);
+        assert.strictEqual(shortString.errors.length, 1);
+
+        const validString = await resolveValues(schema, { value: 'hello' });
+        assert.ok(validString.ok);
+      });
+
+      it('should validate number constraints', async () => {
+        const lowNumber = await resolveValues(schema, { value: 5 });
+        assert.ok(!lowNumber.ok);
+        assert.strictEqual(lowNumber.errors.length, 1);
+
+        const validNumber = await resolveValues(schema, { value: 42 });
+        assert.ok(validNumber.ok);
+      });
+    });
+
+    describe('array with multiple types', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          list: {
+            type: 'array',
+            items: {
+              type: ['string', 'number']
+            }
+          }
+        }
+      };
+
+      it('should accept arrays with valid mixed types', async () => {
+        const result = await resolveValues(schema, {
+          list: ['hello', 42, 'world', 123]
+        });
+        assert.ok(result.ok);
+        assert.deepStrictEqual(result.value.list, ['hello', 42, 'world', 123]);
+      });
+
+      it('should reject arrays containing invalid types', async () => {
+        const result = await resolveValues(schema, {
+          list: ['hello', 42, true]
+        });
+        assert.ok(!result.ok);
+        assert.strictEqual(result.errors.length, 1);
+      });
+    });
+
+    describe('default values', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          value: {
+            type: ['string', 'number'],
+            default: 'default'
+          }
+        }
+      };
+
+      it('should use default value when property is missing', async () => {
+        const result = await resolveValues(schema, {});
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.value, 'default');
+      });
+
+      it('should allow overriding default with valid types', async () => {
+        const stringResult = await resolveValues(schema, {
+          value: 'test'
+        });
+        assert.ok(stringResult.ok);
+        assert.strictEqual(stringResult.value.value, 'test');
+
+        const numberResult = await resolveValues(schema, {
+          value: 42
+        });
+        assert.ok(numberResult.ok);
+        assert.strictEqual(numberResult.value.value, 42);
+      });
+    });
+
+    describe('nested properties', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          nested: {
+            type: 'object',
+            properties: {
+              value: {
+                type: ['string', 'number'],
+                minLength: 2,
+                minimum: 10
+              }
+            },
+            required: ['value']
+          }
+        }
+      };
+
+      it('should validate nested string values', async () => {
+        const result = await resolveValues(schema, {
+          nested: { value: 'hello' }
+        });
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.nested.value, 'hello');
+      });
+
+      it('should validate nested number values', async () => {
+        const result = await resolveValues(schema, {
+          nested: { value: 42 }
+        });
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.nested.value, 42);
+      });
+
+      it('should reject nested invalid types', async () => {
+        const result = await resolveValues(schema, {
+          nested: { value: true }
+        });
+        assert.ok(!result.ok);
+        assert.strictEqual(result.errors.length, 1);
+      });
+
+      it('should require nested value property', async () => {
+        const result = await resolveValues(schema, {
+          nested: {}
+        });
+        assert.ok(!result.ok);
+        assert.strictEqual(result.errors.length, 1);
+        assert.strictEqual(result.errors[0].message, 'Missing required property: value');
+      });
+    });
+
+    describe('composition with multiple types', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          value: {
+            allOf: [
+              {
+                type: ['string', 'number']
+              },
+              {
+                type: ['string', 'boolean']
+              }
+            ]
+          }
+        }
+      };
+
+      it('should accept values valid for all schemas', async () => {
+        const result = await resolveValues(schema, {
+          value: 'test'
+        });
+        assert.ok(result.ok);
+        assert.strictEqual(result.value.value, 'test');
+      });
+
+      it('should reject values not valid for all schemas', async () => {
+        const numberResult = await resolveValues(schema, {
+          value: 42
+        });
+
+        assert.ok(!numberResult.ok);
+        assert.strictEqual(numberResult.errors.length, 1);
+
+        const booleanResult = await resolveValues(schema, {
+          value: true
+        });
+
+        assert.ok(!booleanResult.ok);
+        assert.strictEqual(booleanResult.errors.length, 1);
+
+        // This is the only one that should pass
+        const stringResult = await resolveValues(schema, {
+          value: 'true'
+        });
+
+        assert.ok(stringResult.ok);
+      });
+
+      it('should correctly handle type validation in allOf', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          properties: {
+            value: {
+              allOf: [
+                {
+                  type: ['string', 'number']
+                },
+                {
+                  type: ['string', 'boolean']
+                }
+              ]
+            }
+          }
+        };
+
+        // A string should be valid as it satisfies both schemas
+        const stringResult = await resolveValues(schema, { value: 'test' });
+        assert.ok(stringResult.ok);
+        assert.strictEqual(stringResult.value.value, 'test');
+
+        const numberResult = await resolveValues(schema, { value: 42 });
+        assert.ok(!numberResult.ok);
+
+        const booleanResult = await resolveValues(schema, { value: true });
+        assert.ok(!booleanResult.ok);
+
+        const arrayResult = await resolveValues(schema, { value: [] });
+        assert.ok(!arrayResult.ok);
+      });
+
+      it('should correctly handle integer/number in allOf', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          properties: {
+            value: {
+              allOf: [
+                {
+                  type: ['string', 'number']
+                },
+                {
+                  type: ['integer', 'boolean']
+                }
+              ]
+            }
+          }
+        };
+
+        const numberResult = await resolveValues(schema, { value: 42 });
+        assert.ok(numberResult.ok);
+
+        const stringResult = await resolveValues(schema, { value: 'test' });
+        assert.ok(!stringResult.ok);
+
+        const booleanResult = await resolveValues(schema, { value: true });
+        assert.ok(!booleanResult.ok);
+
+        const arrayResult = await resolveValues(schema, { value: [] });
+        assert.ok(!arrayResult.ok);
+      });
+    });
+  });
 });
+

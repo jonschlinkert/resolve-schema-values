@@ -1,8 +1,51 @@
 import type { JSONSchema, ResolveOptions } from '~/types';
 import { evaluateCondition, validateValue } from '~/validate';
+import { schemaProps } from '~/schema-props';
 import { mergeSchemas } from '~/merge';
 
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+export const getValueType = (value: any, types: string | string[]): string | undefined => {
+  const typeArr = Array.isArray(types) ? types : [types];
+  if (value === null && typeArr.includes('null')) return 'null';
+  if (Array.isArray(value) && typeArr.includes('array')) return 'array';
+  if (isObject(value) && typeArr.includes('object')) return 'object';
+  if (typeof value === 'boolean' && typeArr.includes('boolean')) return 'boolean';
+  if (typeof value === 'string' && typeArr.includes('string')) return 'string';
+  if (typeof value === 'number' && typeArr.includes('number')) return 'number';
+  if (typeof value === 'number' && typeArr.includes('integer')) return 'integer';
+  return undefined;
+};
+
+export const filterProps = (schema: JSONSchema, valueType: string) => {
+  const typeProps = new Set(schemaProps[valueType]);
+  const filtered = { ...schema };
+
+  for (const key of Object.keys(schema)) {
+    if (!schemaProps.base.includes(key) && !typeProps.has(key)) {
+      delete filtered[key];
+    }
+  }
+
+  return filtered;
+};
+
+const isValidValueType = (value: any, type: string): boolean => {
+  if (Array.isArray(type)) {
+    return type.some(t => isValidValueType(value, t));
+  }
+
+  switch (type) {
+    case 'null': return value === null;
+    case 'array': return Array.isArray(value);
+    case 'object': return isObject(value);
+    case 'boolean': return typeof value === 'boolean';
+    case 'number': return typeof value === 'number';
+    case 'integer': return typeof value === 'number' && Number.isInteger(value);
+    case 'string': return typeof value === 'string';
+    default: return false;
+  }
+};
 
 export const getSegments = (
   input: string,
@@ -244,7 +287,24 @@ export const resolveAllOf = async (
   key?: string
 ): Promise<Result<any>> => {
   const { allOf, ...rest } = schema;
-  const mergedSchema = allOf.reduce((acc, subSchema) => mergeSchemas(acc, subSchema), rest);
+
+  for (const schema of allOf) {
+    if (schema.type && !isValidValueType(value, schema.type)) {
+      const type = [].concat(schema.type).join(', ');
+      return failure([{ message: `Value must be of type: ${type}` }], parent, key);
+    }
+  }
+
+  let mergedSchema = { ...rest };
+
+  for (const subSchema of allOf) {
+    mergedSchema = mergeSchemas(mergedSchema, subSchema, { isAllOf: true });
+
+    if (mergedSchema.errors) {
+      return failure(mergedSchema.errors, parent, key);
+    }
+  }
+
   return internalResolveValues(mergedSchema, value, options, parent, key);
 };
 
@@ -488,14 +548,15 @@ export const resolveArray = async (
 
   if (!Array.isArray(value)) {
     if (value === undefined || value === null) {
-      const defaultValue = schema.default;
-      if (defaultValue !== undefined) {
-        return success(defaultValue, parent, key);
+      if (schema.default !== undefined) {
+        return success(schema.default, parent, key);
       }
+
       if (required.includes(key)) {
         errors.push({ message: `Missing required array: ${key}` });
         return failure(errors, parent, key);
       }
+
       return success([], parent, key);
     }
 
@@ -537,6 +598,7 @@ export const resolveArrayItems = async (
 
   for (let i = 0; i < values.length; i++) {
     const resolved = await internalResolveValues(schema.items, values[i], options, parent, i.toString());
+
     if (!resolved.ok) {
       for (const error of resolved.errors) {
         errors.push({
@@ -652,13 +714,16 @@ export const resolveValue = async (
 
   if (value === undefined || value === null) {
     const defaultValue = schema.default ?? schema.const;
+
     if (defaultValue !== undefined) {
       return success(defaultValue, parent, key);
     }
+
     if (required.includes(key)) {
       errors.push({ message: `Missing required value: ${key}` });
       return failure(errors, parent, key);
     }
+
     return success(value, parent, key);
   }
 
@@ -713,25 +778,25 @@ export const internalResolveValues = async (
     return success(result, parent, key);
   }
 
-  if (Array.isArray(schema.required)) {
-    schema.required = [...new Set(schema.required.filter(k => schema.properties?.[k]))];
+  if (Array.isArray(schema.type)) {
+    const valueType = getValueType(result, schema.type);
+
+    if (valueType === undefined) {
+      return failure([{ message: `Value must be one of type: ${schema.type.join(', ')}` }], parent, key);
+    }
+
+    const typeSchema = filterProps({ ...schema, type: valueType }, valueType);
+    return internalResolveValues(typeSchema, result, options, parent, key);
   }
 
   switch (schema.type) {
-    case 'null':
-      return resolveNull(schema, result, parent, key);
-    case 'array':
-      return resolveArray(schema, result, options, parent, key);
-    case 'boolean':
-      return resolveBoolean(schema, result, parent, key);
-    case 'integer':
-      return resolveInteger(schema, result, parent, key);
-    case 'number':
-      return resolveNumber(schema, result, parent, key);
-    case 'object':
-      return resolveObject(schema, result, options, parent, key);
-    case 'string':
-      return resolveString(schema, result, parent, key);
+    case 'null': return resolveNull(schema, result, parent, key);
+    case 'array': return resolveArray(schema, result, options, parent, key);
+    case 'boolean': return resolveBoolean(schema, result, parent, key);
+    case 'integer': return resolveInteger(schema, result, parent, key);
+    case 'number': return resolveNumber(schema, result, parent, key);
+    case 'object': return resolveObject(schema, result, options, parent, key);
+    case 'string': return resolveString(schema, result, parent, key);
     default: {
       return failure([{ message: `Unsupported type: ${schema.type}` }], parent, key);
     }

@@ -38,9 +38,57 @@ const deepMerge = (obj1: any, obj2: any): any => {
   return result;
 };
 
+const hasNumberTypes = type => {
+  return [].concat(type).some(t => t === 'number' || t === 'integer');
+};
+
+export const mergeTypes = (schema1: JSONSchema, schema2: JSONSchema, options) => {
+  const types1 = [].concat(schema1.type || []);
+  const types2 = [].concat(schema2.type || []);
+  let type;
+
+  // When merging "allOf" sub-schemas, we need to find the intersection of types,
+  // since values cannot be more than one type, with the exception of number and integer
+  if (options.isAllOf) {
+    // Find intersection for allOf
+    type = types1.filter(t => types2.includes(t));
+
+    if (type.length === 1) {
+      type = type[0];
+    } else if (type.length === 0) {
+      // Special case for number and integer
+      if (hasNumberTypes(types1) && hasNumberTypes(types2)) {
+        // No need to check if integer exists, since it has to exist
+        // based on the intersection check above. At this point, we
+        // know that there is at leat one "number" and at least one "integer" type
+        type = 'integer';
+      } else {
+
+        // No valid types satisfy both schemas
+        return { errors: [{ message: 'No valid types satisfy both schemas', path: ['merge'] }] };
+      }
+    }
+  } else {
+    // Union for other cases
+    type = [...new Set([...types1, ...types2])];
+  }
+
+  return type;
+};
+
 // eslint-disable-next-line complexity
-export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {}): JSONSchema => {
+export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {}, options = {}): JSONSchema => {
   const result: JSONSchema = { ...schema1, ...schema2 };
+
+  if (schema1.type && schema2.type && schema1.type !== schema2.type) {
+    const type = mergeTypes(schema1, schema2, options);
+
+    if (type.errors) {
+      return type;
+    }
+
+    result.type = type;
+  }
 
   // Merge validation keywords
   if (schema1.const !== undefined || schema2.const !== undefined) {
@@ -87,6 +135,7 @@ export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {})
   // Merge properties
   if (schema1.properties || schema2.properties) {
     result.properties = {};
+
     const allPropertyKeys = new Set([
       ...Object.keys(schema1.properties || {}),
       ...Object.keys(schema2.properties || {})
