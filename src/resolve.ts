@@ -1,7 +1,21 @@
 import type { JSONSchema, ResolveOptions } from '~/types';
 import { evaluateCondition, validateValue } from '~/validate';
+import { mergeSchemas } from '~/merge';
 
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+export const getSegments = (
+  input: string,
+  options: {
+    language?: string;
+    granularity?: 'grapheme' | 'word' | 'sentence' | 'line',
+    localeMatcher: 'lookup' | 'best fit'
+  } = {}
+): Intl.SegmentData[] => {
+  const { language, granularity = 'grapheme', ...opts } = options;
+  const segmenter = new Intl.Segmenter(language, { granularity, ...opts });
+  return Array.from(segmenter.segment(input));
+};
 
 interface ValidationError {
   message: string;
@@ -50,13 +64,14 @@ export const resolveNull = (schema: JSONSchema, value: any, parent, key?: string
 };
 
 export const resolveBoolean = (schema: JSONSchema, value: any, parent, key?: string): Result<boolean> => {
+  const required = parent?.required || [];
   const errors: ValidationError[] = [];
 
   if (value === undefined || value === null) {
     return success(schema.default !== undefined ? schema.default : false, parent, key);
   }
 
-  if (typeof value !== 'boolean') {
+  if (typeof value !== 'boolean' && (value != null || required.includes(key))) {
     errors.push({ message: 'Value must be a boolean' });
     return failure(errors, parent, key);
   }
@@ -65,13 +80,23 @@ export const resolveBoolean = (schema: JSONSchema, value: any, parent, key?: str
 };
 
 export const resolveInteger = (schema: JSONSchema, value: any, parent, key?: string): Result<number> => {
+  const required = parent?.required || [];
   const errors: ValidationError[] = [];
 
   if (value === undefined || value === null) {
-    return success(schema.default !== undefined ? schema.default : 0, parent, key);
+    if (schema.default !== undefined) {
+      return success(schema.default, parent, key);
+    }
+
+    if (required.includes(key)) {
+      errors.push({ message: `Missing required integer: ${key}` });
+      return failure(errors, parent, key);
+    }
+
+    return success(0, parent, key);
   }
 
-  if (typeof value !== 'number') {
+  if (typeof value !== 'number' && (value != null || required.includes(key))) {
     errors.push({ message: 'Value must be a number' });
   }
 
@@ -95,13 +120,23 @@ export const resolveInteger = (schema: JSONSchema, value: any, parent, key?: str
 };
 
 export const resolveNumber = (schema: JSONSchema, value: any, parent, key?: string): Result<number> => {
+  const required = parent?.required || [];
   const errors: ValidationError[] = [];
 
   if (value === undefined || value === null) {
-    return success(schema.default !== undefined ? schema.default : 0, parent, key);
+    if (schema.default !== undefined) {
+      return success(schema.default, parent, key);
+    }
+
+    if (required.includes(key)) {
+      errors.push({ message: `Missing required number: ${key}` });
+      return failure(errors, parent, key);
+    }
+
+    return success(0, parent, key);
   }
 
-  if (typeof value !== 'number') {
+  if (typeof value !== 'number' && (value != null || required.includes(key))) {
     errors.push({ message: 'Value must be a number' });
   }
 
@@ -124,23 +159,41 @@ export const resolveString = (schema: JSONSchema, value: any, parent, key?: stri
   const required = parent?.required || [];
   const errors: ValidationError[] = [];
 
-  if ((value === undefined || value === null) && schema.default !== undefined) {
-    return success(schema.default, parent, key);
+  if (value === undefined || value === null) {
+    if (schema.default !== undefined) {
+      return success(schema.default, parent, key);
+    }
+
+    if (required.includes(key)) {
+      errors.push({ message: `Missing required string: ${key}` });
+      return failure(errors, parent, key);
+    }
+
+    return success(undefined, parent, key);
   }
 
   if (typeof value !== 'string' && (value != null || required.includes(key))) {
     errors.push({ message: 'Value must be a string' });
   }
 
-  if (schema.minLength !== undefined && value?.length < schema.minLength) {
+  let valueLength;
+  const length = () => {
+    if (valueLength === undefined) {
+      const segments = getSegments(value);
+      valueLength = segments.length;
+    }
+    return valueLength;
+  };
+
+  if (schema.minLength !== undefined && length() < schema.minLength) {
     errors.push({ message: `String length must be >= ${schema.minLength}` });
   }
 
-  if (schema.maxLength !== undefined && value?.length > schema.maxLength) {
+  if (schema.maxLength !== undefined && length() > schema.maxLength) {
     errors.push({ message: `String length must be <= ${schema.maxLength}` });
   }
 
-  if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+  if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) {
     errors.push({ message: `String must match pattern: ${schema.pattern}` });
   }
 
@@ -163,33 +216,24 @@ export const resolveConditional = async (
   }
 
   const isSatisfied = await evaluateCondition(schema.if, value, options);
-  const targetSchema = isSatisfied ? schema.then : schema.else;
+  const conditionalSchema = isSatisfied ? schema.then : schema.else;
 
-  if (!targetSchema) {
+  if (!conditionalSchema) {
     return success(value, parent, key);
   }
 
-  if (targetSchema.properties) {
-    const resolvedProperties = await resolveObjectProperties(targetSchema.properties, value, options, parent, key);
-    if (!resolvedProperties.ok) {
-      return resolvedProperties;
-    }
-    return success({ ...value, ...resolvedProperties.value }, parent, key);
-  }
+  // Create base schema without conditional properties
+  const baseSchema = { ...schema };
+  delete baseSchema.if;
+  delete baseSchema.then;
+  delete baseSchema.else;
 
-  const resolved = await internalResolveValues(targetSchema, value, options, parent, key);
-  if (!resolved.ok) {
-    return resolved;
-  }
+  // Merge base schema with the appropriate conditional schema
+  const mergedSchema = mergeSchemas(baseSchema, conditionalSchema);
 
-  if (targetSchema.required?.length > 0) {
-    const missing = targetSchema.required.filter(prop => !(prop in resolved.value));
-    if (missing.length > 0) {
-      return failure(missing.map(prop => ({ message: `Missing required property: ${prop}` })), parent, key);
-    }
-  }
-
-  return success({ ...value, ...resolved.value }, parent, key);
+  // Resolve the value against the merged schema
+  const resolved = await internalResolveValues(mergedSchema, value, options, parent, key);
+  return resolved;
 };
 
 export const resolveAllOf = async (
@@ -199,32 +243,9 @@ export const resolveAllOf = async (
   parent,
   key?: string
 ): Promise<Result<any>> => {
-  let result = {};
-  const errors: ValidationError[] = [];
-
-  for (const subSchema of schema.allOf) {
-    if (subSchema.properties) {
-      const resolvedProperties = await resolveObjectProperties(subSchema.properties, value, options, subSchema, key);
-      if (!resolvedProperties.ok) {
-        errors.push(...resolvedProperties.errors);
-      } else {
-        result = { ...result, ...resolvedProperties.value };
-      }
-    }
-
-    const resolved = await internalResolveValues(subSchema, { ...value, ...result }, options, parent, key);
-    if (!resolved.ok) {
-      errors.push(...resolved.errors);
-    } else {
-      result = { ...result, ...resolved.value };
-    }
-  }
-
-  if (errors.length > 0) {
-    return failure(errors, parent, key);
-  }
-
-  return success(result, parent, key);
+  const { allOf, ...rest } = schema;
+  const mergedSchema = allOf.reduce((acc, subSchema) => mergeSchemas(acc, subSchema), rest);
+  return internalResolveValues(mergedSchema, value, options, parent, key);
 };
 
 export const resolveAnyOf = async (
@@ -316,6 +337,11 @@ export const resolveObjectProperties = async (
   const errors: ValidationError[] = [];
 
   for (const [propKey, propSchema] of Object.entries(properties)) {
+    if (value?.[propKey] === undefined && propSchema.default !== undefined) {
+      result[propKey] = propSchema.default;
+      continue;
+    }
+
     const resolved = await internalResolveValues(propSchema, value?.[propKey], options, parent, propKey);
 
     if (!resolved.ok) {
@@ -345,47 +371,25 @@ export const resolveDependentSchemas = async (
   parent,
   key?: string
 ): Promise<Result<Record<string, any>>> => {
-  if (!schema.dependentSchemas) {
+  if (!schema.dependentSchemas || !value) {
     return success(result, parent, key);
   }
 
-  let newResult = { ...result };
-  const errors: ValidationError[] = [];
+  const { dependentSchemas, ...rest } = schema;
 
-  if (value) {
-    for (const [prop, dependentSchema] of Object.entries(schema.dependentSchemas)) {
-      if (value[prop] !== undefined) {
-        if (dependentSchema.properties) {
-          const resolvedProperties = await resolveObjectProperties(
-            dependentSchema.properties,
-            value,
-            options,
-            parent,
-            prop
-          );
+  // Create merged schema from applicable dependent schemas
+  const depSchemas = Object.entries(dependentSchemas)
+    .filter(([prop]) => value[prop] !== undefined)
+    .map(([, schema]) => schema);
 
-          if (!resolvedProperties.ok) {
-            errors.push(...resolvedProperties.errors);
-          } else {
-            newResult = { ...newResult, ...resolvedProperties.value };
-          }
-        }
-
-        const resolvedDependent = await internalResolveValues(dependentSchema, newResult, options, parent, prop);
-        if (!resolvedDependent.ok) {
-          errors.push(...resolvedDependent.errors);
-        } else {
-          newResult = { ...newResult, ...resolvedDependent.value };
-        }
-      }
-    }
+  if (depSchemas.length === 0) {
+    return success(result, parent, key);
   }
 
-  if (errors.length > 0) {
-    return failure(errors, parent, key);
-  }
+  const mergedSchema = depSchemas.reduce((acc, schema) => mergeSchemas(acc, schema), rest);
 
-  return success(newResult, parent, key);
+  // Resolve against merged schema
+  return internalResolveValues(mergedSchema, result, options, parent, key);
 };
 
 export const resolvePatternProperties = async (
@@ -404,16 +408,16 @@ export const resolvePatternProperties = async (
   const errors: ValidationError[] = [];
 
   for (const [pattern, propSchema] of Object.entries(schema.patternProperties)) {
-    const regex = new RegExp(pattern);
+    const regex = new RegExp(pattern, 'u');
 
-    for (const [key, val] of Object.entries(value)) {
-      if (regex.test(key) && !(key in newResult)) {
-        const resolved = await internalResolveValues(propSchema, val, options, parent, key);
+    for (const [k, v] of Object.entries(value)) {
+      if (regex.test(k) && !(k in newResult)) {
+        const resolved = await internalResolveValues(propSchema, v, options, parent, k);
         if (!resolved.ok) {
           for (const error of resolved.errors) {
             errors.push({
               message: error.message,
-              path: error.path ? [key, ...error.path] : [key]
+              path: error.path ? [k, ...error.path] : [k]
             });
           }
         } else {
@@ -445,22 +449,22 @@ export const resolveAdditionalProperties = async (
   const newResult = { ...result };
   const errors: ValidationError[] = [];
 
-  for (const [entryKey, val] of Object.entries(value)) {
-    if (!newResult.hasOwnProperty(entryKey)) {
+  for (const [k, v] of Object.entries(value)) {
+    if (!newResult.hasOwnProperty(k)) {
       if (typeof schema.additionalProperties === 'object') {
-        const resolved = await internalResolveValues(schema.additionalProperties, val, options, parent, entryKey);
+        const resolved = await internalResolveValues(schema.additionalProperties, v, options, parent, k);
         if (!resolved.ok) {
           for (const error of resolved.errors) {
             errors.push({
               message: error.message,
-              path: error.path ? [entryKey, ...error.path] : [entryKey]
+              path: error.path ? [k, ...error.path] : [k]
             });
           }
         } else {
-          newResult[entryKey] = resolved.value;
+          newResult[k] = resolved.value;
         }
       } else {
-        newResult[entryKey] = val;
+        newResult[k] = v;
       }
     }
   }
@@ -480,10 +484,19 @@ export const resolveArray = async (
   key?: string
 ): Promise<Result<any[]>> => {
   const errors: ValidationError[] = [];
+  const required = parent?.required || [];
 
   if (!Array.isArray(value)) {
     if (value === undefined || value === null) {
-      return success(schema.default !== undefined ? schema.default : [], parent, key);
+      const defaultValue = schema.default;
+      if (defaultValue !== undefined) {
+        return success(defaultValue, parent, key);
+      }
+      if (required.includes(key)) {
+        errors.push({ message: `Missing required array: ${key}` });
+        return failure(errors, parent, key);
+      }
+      return success([], parent, key);
     }
 
     errors.push({ message: 'Value must be an array' });
@@ -551,19 +564,36 @@ export const resolveObject = async (
   key?: string
 ): Promise<Result<any>> => {
   const errors: ValidationError[] = [];
+  const required = parent?.required || [];
 
   if (!isObject(value)) {
     if (value === undefined || value === null) {
-      return success(schema.default !== undefined ? schema.default : {}, parent, key);
+      const defaultValue = schema.default;
+      if (defaultValue !== undefined) {
+        return success(defaultValue, parent, key);
+      }
+      if (required.includes(key)) {
+        errors.push({ message: `Missing required object: ${key}` });
+        return failure(errors, parent, key);
+      }
+      return success({}, parent, key);
     }
 
     errors.push({ message: 'Value must be an object' });
   }
 
   if (schema.required) {
-    for (const prop of schema.required) {
-      if (!(prop in value)) {
-        errors.push({ message: `Missing required property: ${prop}`, path: [prop] });
+    for (const key of schema.required) {
+      const prop = schema.properties?.[key];
+
+      if (!(key in value)) {
+        const defaultValue = prop?.default;
+
+        if (defaultValue !== undefined) {
+          value[key] = defaultValue;
+        } else {
+          errors.push({ message: `Missing required property: ${key}`, path: [key] });
+        }
       }
     }
   }
@@ -614,13 +644,22 @@ export const resolveValue = async (
   key?: string
 ): Promise<Result<any>> => {
   const errors: ValidationError[] = [];
+  const required = parent?.required || [];
 
   if (schema.oneOf || schema.anyOf || schema.allOf) {
     return resolveComposition(schema, value, options, parent, key);
   }
 
   if (value === undefined || value === null) {
-    return success(schema.default ?? schema.const ?? value, parent, key);
+    const defaultValue = schema.default ?? schema.const;
+    if (defaultValue !== undefined) {
+      return success(defaultValue, parent, key);
+    }
+    if (required.includes(key)) {
+      errors.push({ message: `Missing required value: ${key}` });
+      return failure(errors, parent, key);
+    }
+    return success(value, parent, key);
   }
 
   if (schema.const !== undefined && value !== schema.const) {
@@ -672,6 +711,10 @@ export const internalResolveValues = async (
 
   if (!schema.type) {
     return success(result, parent, key);
+  }
+
+  if (Array.isArray(schema.required)) {
+    schema.required = [...new Set(schema.required.filter(k => schema.properties?.[k]))];
   }
 
   switch (schema.type) {

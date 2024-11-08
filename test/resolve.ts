@@ -8,16 +8,44 @@ describe('resolve', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
-          something: { type: 'string', required: true, minLength: 1 },
+          something: { type: 'string', minLength: 1 },
           other: { type: 'string' }
         },
-        required: ['required']
+        required: ['something']
       };
 
       const result = await resolveValues(schema, {});
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 1);
-      assert.strictEqual(result.errors[0].message, 'Missing required property: required');
+      assert.strictEqual(result.errors[0].message, 'Missing required property: something');
+    });
+
+    it('should ignore required names that are invalid', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          something: { type: 'string', minLength: 1 },
+          other: { type: 'string' }
+        },
+        required: ['required', 'foo']
+      };
+
+      const result = await resolveValues(schema, {});
+      assert.ok(result.ok);
+    });
+
+    it('should use default value on required properties without an error', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          something: { type: 'string', minLength: 1, default: 'foo' },
+          other: { type: 'string' }
+        },
+        required: ['something']
+      };
+
+      const result = await resolveValues(schema, {});
+      assert.ok(result.ok);
     });
 
     it('should handle missing required nested field', async () => {
@@ -91,6 +119,53 @@ describe('resolve', () => {
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'String length must be >= 3');
+    });
+
+    it('should correctly calculate length of strings with emoji', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 5
+          }
+        }
+      };
+
+      // '👨‍👩‍👧‍👦' is a single grapheme (family emoji) but multiple code points
+      const tooShort = await resolveValues(schema, { text: '👨‍👩‍👧‍👦a' });
+      assert.ok(!tooShort.ok);
+      assert.strictEqual(tooShort.errors[0].message, 'String length must be >= 3');
+
+      // 'abc👨‍👩‍👧‍👦de' is 6 graphemes
+      const tooLong = await resolveValues(schema, { text: 'abc👨‍👩‍👧‍👦de' });
+      assert.ok(!tooLong.ok);
+      assert.strictEqual(tooLong.errors[0].message, 'String length must be <= 5');
+
+      // 'a👨‍👩‍👧‍👦b' is 3 graphemes
+      const justRight = await resolveValues(schema, { text: 'a👨‍👩‍👧‍👦b' });
+      assert.ok(justRight.ok);
+    });
+
+    it('should handle combining characters correctly', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 5
+          }
+        }
+      };
+
+      // 'é' can be composed of 'e' + '´' (combining acute accent)
+      const combining = await resolveValues(schema, { text: 'café' }); // should be 4 graphemes
+      assert.ok(combining.ok);
+
+      const decomposed = await resolveValues(schema, { text: 'cafe\u0301' }); // same text with decomposed é
+      assert.ok(decomposed.ok);
     });
 
     it('should validate string maximum length', async () => {
@@ -292,6 +367,42 @@ describe('resolve', () => {
       assert.ok(!result.ok);
       assert.strictEqual(result.errors.length, 1);
       assert.strictEqual(result.errors[0].message, 'Missing required property: taxId');
+    });
+
+    it('should handle regex special characters in patterns', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            pattern: 'hello\\(world\\)'
+          }
+        }
+      };
+
+      const result1 = await resolveValues(schema, { text: 'hello(world)' });
+      assert.ok(result1.ok);
+
+      const result2 = await resolveValues(schema, { text: 'helloworld' });
+      assert.ok(!result2.ok);
+    });
+
+    it('should support Unicode patterns', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            pattern: '^[\\p{L}]+$' // Unicode letter category
+          }
+        }
+      };
+
+      const result1 = await resolveValues(schema, { text: 'HelloПривет你好' }); // mixed scripts
+      assert.ok(result1.ok);
+
+      const result2 = await resolveValues(schema, { text: 'Hello123' }); // includes numbers
+      assert.ok(!result2.ok);
     });
 
     it('should validate field patterns when condition is met', async () => {
@@ -722,6 +833,46 @@ describe('resolve', () => {
       assert.strictEqual(result.value.S_name, 'test');
       assert.strictEqual(result.value.N_age, 25);
       assert.strictEqual(result.value.other, 'value');
+    });
+
+    describe('pattern properties with special characters', () => {
+      it('should handle regex special characters in property patterns', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          patternProperties: {
+            '^\\[.*\\]$': { // matches properties wrapped in square brackets
+              type: 'string'
+            }
+          }
+        };
+
+        const result = await resolveValues(schema, {
+          '[test]': 'value',
+          'normalKey': 'other'
+        });
+
+        assert.ok(result.ok);
+        assert.strictEqual(result.value['[test]'], 'value');
+      });
+
+      it('should support Unicode in property patterns', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          patternProperties: {
+            '^[\\p{Script=Cyrillic}]+$': { // matches Cyrillic property names
+              type: 'string'
+            }
+          }
+        };
+
+        const result = await resolveValues(schema, {
+          'привет': 'hello',
+          'hello': 'world'
+        });
+
+        assert.ok(result.ok);
+        assert.strictEqual(result.value['привет'], 'hello');
+      });
     });
   });
 
