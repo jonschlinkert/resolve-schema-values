@@ -1472,16 +1472,31 @@ describe('resolve', () => {
         allOf: [{ not: { required: ['a', 'b'] } }]
       };
 
-      const validResult = await resolveValues(schema, {
-        a: 'test'
-      });
+      const validResult = await resolveValues(schema, { a: 'test' });
+      console.log(validResult.errors);
       assert.ok(validResult.ok);
       assert.strictEqual(validResult.value.a, 'test');
 
-      const invalidResult = await resolveValues(schema, {
-        a: 'test',
-        b: 'test'
-      });
+      const invalidResult = await resolveValues(schema, { a: 'test', b: 'test' });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Value must not match schema');
+    });
+
+    it('should enforce mutually exclusive properties via not/required', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          a: { type: 'string' },
+          b: { type: 'string' }
+        },
+        allOf: [{ not: { required: ['b'] } }, { not: { required: ['a'] } }]
+      };
+
+      const validResult = await resolveValues(schema, { a: 'test' });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.a, 'test');
+
+      const invalidResult = await resolveValues(schema, { a: 'test', b: 'test' });
       assert.ok(!invalidResult.ok);
       assert.strictEqual(invalidResult.errors[0].message, 'Value must not match schema');
     });
@@ -1497,16 +1512,11 @@ describe('resolve', () => {
         oneOf: [{ required: ['a'] }, { required: ['b'] }, { required: ['c'] }]
       };
 
-      const validResult = await resolveValues(schema, {
-        b: 'test'
-      });
+      const validResult = await resolveValues(schema, { b: 'test' });
       assert.ok(validResult.ok);
       assert.strictEqual(validResult.value.b, 'test');
 
-      const invalidTwoProps = await resolveValues(schema, {
-        a: 'test',
-        b: 'test'
-      });
+      const invalidTwoProps = await resolveValues(schema, { a: 'test', b: 'test' });
       assert.ok(!invalidTwoProps.ok);
       assert.strictEqual(invalidTwoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
 
