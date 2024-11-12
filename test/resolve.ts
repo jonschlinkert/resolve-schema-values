@@ -719,9 +719,7 @@ describe('resolve', () => {
           type: 'object',
           properties: {
             value: {
-              anyOf: [
-                { type: 'string' }
-              ],
+              anyOf: [{ type: 'string' }],
               default: 'default'
             }
           }
@@ -737,9 +735,7 @@ describe('resolve', () => {
           type: 'object',
           properties: {
             value: {
-              anyOf: [
-                { type: 'number' }
-              ],
+              anyOf: [{ type: 'number' }],
               default: 'default'
             }
           }
@@ -755,10 +751,7 @@ describe('resolve', () => {
           type: 'object',
           properties: {
             value: {
-              anyOf: [
-                { type: 'string' },
-                { type: 'number' }
-              ],
+              anyOf: [{ type: 'string' }, { type: 'number' }],
               default: 'default'
             }
           }
@@ -776,9 +769,7 @@ describe('resolve', () => {
           type: 'object',
           properties: {
             value: {
-              oneOf: [
-                { type: 'number', minimum: 0 }
-              ]
+              oneOf: [{ type: 'number', minimum: 0 }]
             }
           }
         };
@@ -793,9 +784,7 @@ describe('resolve', () => {
           type: 'object',
           properties: {
             value: {
-              oneOf: [
-                { type: 'number', maximum: 0 }
-              ]
+              oneOf: [{ type: 'number', maximum: 0 }]
             }
           }
         };
@@ -838,10 +827,7 @@ describe('resolve', () => {
         }
       };
 
-      const result = await resolveValues(schema, [
-        { id: 1 },
-        { id: 2, name: 'test' }
-      ]);
+      const result = await resolveValues(schema, [{ id: 1 }, { id: 2, name: 'test' }]);
       assert.ok(result.ok);
       assert.deepStrictEqual(result.value, [
         { id: 1, name: 'unnamed' },
@@ -895,9 +881,9 @@ describe('resolve', () => {
       };
 
       const result = await resolveValues(schema, {
-        'S_name': 'test',
-        'N_age': 25,
-        'other': 'value'
+        S_name: 'test',
+        N_age: 25,
+        other: 'value'
       });
 
       assert.ok(result.ok);
@@ -911,7 +897,8 @@ describe('resolve', () => {
         const schema: JSONSchema = {
           type: 'object',
           patternProperties: {
-            '^\\[.*\\]$': { // matches properties wrapped in square brackets
+            '^\\[.*\\]$': {
+              // matches properties wrapped in square brackets
               type: 'string'
             }
           }
@@ -930,15 +917,16 @@ describe('resolve', () => {
         const schema: JSONSchema = {
           type: 'object',
           patternProperties: {
-            '^[\\p{Script=Cyrillic}]+$': { // matches Cyrillic property names
+            '^[\\p{Script=Cyrillic}]+$': {
+              // matches Cyrillic property names
               type: 'string'
             }
           }
         };
 
         const result = await resolveValues(schema, {
-          'привет': 'hello',
-          'hello': 'world'
+          привет: 'hello',
+          hello: 'world'
         });
 
         assert.ok(result.ok);
@@ -1386,5 +1374,326 @@ describe('resolve', () => {
       });
     });
   });
-});
 
+  describe('format validation', () => {
+    it('should validate date-time format', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          timestamp: { type: 'string', format: 'date-time' }
+        }
+      };
+
+      const validResult = await resolveValues(schema, {
+        timestamp: '2024-01-01T12:00:00Z'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.timestamp, '2024-01-01T12:00:00Z');
+
+      const invalidResult = await resolveValues(schema, {
+        timestamp: 'invalid'
+      });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Invalid date-time format');
+    });
+
+    it('should validate date format', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          date: { type: 'string', format: 'date' }
+        }
+      };
+
+      const validResult = await resolveValues(schema, {
+        date: '2024-01-01'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.date, '2024-01-01');
+
+      const invalidResult = await resolveValues(schema, {
+        date: '2024/01/01'
+      });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Invalid date format');
+    });
+
+    it('should validate email format', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          email: { type: 'string', format: 'email' }
+        }
+      };
+
+      const validResult = await resolveValues(schema, {
+        email: 'test@example.com'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.email, 'test@example.com');
+
+      const invalidResult = await resolveValues(schema, {
+        email: 'invalid-email'
+      });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Invalid email format');
+    });
+
+    it('should validate ipv4 format', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          ip: { type: 'string', format: 'ipv4' }
+        }
+      };
+
+      const validResult = await resolveValues(schema, {
+        ip: '192.168.1.1'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.ip, '192.168.1.1');
+
+      const invalidResult = await resolveValues(schema, {
+        ip: '256.256.256.256'
+      });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Invalid ipv4 format');
+    });
+  });
+
+  describe('property exclusion', () => {
+    it('should enforce mutually exclusive properties via not/required', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          a: { type: 'string' },
+          b: { type: 'string' }
+        },
+        allOf: [{ not: { required: ['a', 'b'] } }]
+      };
+
+      const validResult = await resolveValues(schema, {
+        a: 'test'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.a, 'test');
+
+      const invalidResult = await resolveValues(schema, {
+        a: 'test',
+        b: 'test'
+      });
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Value must not match schema');
+    });
+
+    it('should enforce exactly one property via oneOf/required', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          a: { type: 'string' },
+          b: { type: 'string' },
+          c: { type: 'string' }
+        },
+        oneOf: [{ required: ['a'] }, { required: ['b'] }, { required: ['c'] }]
+      };
+
+      const validResult = await resolveValues(schema, {
+        b: 'test'
+      });
+      assert.ok(validResult.ok);
+      assert.strictEqual(validResult.value.b, 'test');
+
+      const invalidTwoProps = await resolveValues(schema, {
+        a: 'test',
+        b: 'test'
+      });
+      assert.ok(!invalidTwoProps.ok);
+      assert.strictEqual(invalidTwoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
+
+      const invalidNoProps = await resolveValues(schema, {});
+      assert.ok(!invalidNoProps.ok);
+      assert.strictEqual(invalidNoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
+    });
+  });
+
+  describe('nested composition', () => {
+    it('should validate deeply nested allOf/anyOf combinations', async () => {
+      const schema: JSONSchema = {
+        allOf: [
+          {
+            anyOf: [
+              { type: 'string', minLength: 5 },
+              { type: 'number', minimum: 10 }
+            ]
+          },
+          {
+            anyOf: [
+              { type: 'string', maxLength: 10 },
+              { type: 'number', maximum: 20 }
+            ]
+          }
+        ]
+      };
+
+      const validString = await resolveValues(schema, 'valid');
+      assert.ok(validString.ok);
+      assert.strictEqual(validString.value, 'valid');
+
+      const validNumber = await resolveValues(schema, 15);
+      assert.ok(validNumber.ok);
+      assert.strictEqual(validNumber.value, 15);
+
+      const invalidShortString = await resolveValues(schema, 'hi');
+      assert.ok(!invalidShortString.ok);
+      assert.ok(invalidShortString.errors.length > 0);
+
+      const invalidLargeNumber = await resolveValues(schema, 25);
+      assert.ok(!invalidLargeNumber.ok);
+      assert.ok(invalidLargeNumber.errors.length > 0);
+    });
+  });
+
+  describe('dependent required properties', () => {
+    it('should enforce dependent required properties across multiple conditions', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          value: { type: 'string' },
+          format: { type: 'string' }
+        },
+        allOf: [
+          {
+            if: { properties: { type: { const: 'special' } } },
+            then: { required: ['value'] }
+          },
+          {
+            if: { properties: { value: { minLength: 1 } } },
+            then: { required: ['format'] }
+          }
+        ]
+      };
+
+      const validNormal = await resolveValues(schema, { type: 'normal' });
+      assert.ok(validNormal.ok);
+
+      const invalidMissingFormat = await resolveValues(schema, { type: 'special', value: 'test' });
+      assert.ok(!invalidMissingFormat.ok);
+      assert.strictEqual(invalidMissingFormat.errors[0].message, 'Missing required property: format');
+    });
+  });
+
+  describe('array contains validation', () => {
+    it('should validate array contains constraint', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        contains: {
+          type: 'number',
+          minimum: 5
+        }
+      };
+
+      const validResult = await resolveValues(schema, [1, 2, 6, 3]);
+      assert.ok(validResult.ok);
+      assert.deepStrictEqual(validResult.value, [1, 2, 6, 3]);
+
+      const invalidResult = await resolveValues(schema, [1, 2, 3, 4]);
+      assert.ok(!invalidResult.ok);
+      assert.strictEqual(invalidResult.errors[0].message, 'Array must contain at least one matching item');
+    });
+  });
+
+  describe('multiple type validation with constraints', () => {
+    it('should validate value against type-specific constraints', async () => {
+      const schema: JSONSchema = {
+        type: ['string', 'number'],
+        minLength: 3,
+        minimum: 10
+      };
+
+      const validString = await resolveValues(schema, 'test');
+      assert.ok(validString.ok);
+      assert.strictEqual(validString.value, 'test');
+
+      const validNumber = await resolveValues(schema, 15);
+      assert.ok(validNumber.ok);
+      assert.strictEqual(validNumber.value, 15);
+
+      const invalidShortString = await resolveValues(schema, 'ab');
+      assert.ok(!invalidShortString.ok);
+      assert.strictEqual(invalidShortString.errors[0].message, 'String length must be >= 3');
+
+      const invalidSmallNumber = await resolveValues(schema, 5);
+      assert.ok(!invalidSmallNumber.ok);
+      assert.strictEqual(invalidSmallNumber.errors[0].message, 'Value must be >= 10');
+    });
+  });
+
+  describe('property names validation', () => {
+    it('should validate property names against schema', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        propertyNames: {
+          type: 'string',
+          pattern: '^[a-z]+$'
+        }
+      };
+
+      const validResult = await resolveValues(schema, { abc: 1, def: 2 });
+      assert.ok(validResult.ok);
+      assert.deepStrictEqual(validResult.value, { abc: 1, def: 2 });
+
+      const invalidResult = await resolveValues(schema, { 'invalid-key': 1 });
+      assert.ok(!invalidResult.ok);
+      assert.ok(invalidResult.errors[0].message.includes('must match pattern'));
+    });
+  });
+
+  describe('deeply nested conditional validation', () => {
+    it('should validate nested conditionals with multiple dependencies', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              type: { type: 'string' },
+              age: { type: 'number' }
+            },
+            if: {
+              properties: { type: { const: 'minor' } }
+            },
+            then: {
+              properties: { age: { maximum: 18 } }
+            },
+            else: {
+              properties: { age: { minimum: 18 } }
+            }
+          }
+        }
+      };
+
+      const validMinor = await resolveValues(schema, {
+        user: { type: 'minor', age: 15 }
+      });
+      assert.ok(validMinor.ok);
+
+      const validAdult = await resolveValues(schema, {
+        user: { type: 'adult', age: 25 }
+      });
+      assert.ok(validAdult.ok);
+
+      const invalidMinor = await resolveValues(schema, {
+        user: { type: 'minor', age: 20 }
+      });
+      assert.ok(!invalidMinor.ok);
+      assert.strictEqual(invalidMinor.errors[0].message, 'Value must be <= 18');
+
+      const invalidAdult = await resolveValues(schema, {
+        user: { type: 'adult', age: 15 }
+      });
+      assert.ok(!invalidAdult.ok);
+      assert.strictEqual(invalidAdult.errors[0].message, 'Value must be >= 18');
+    });
+  });
+});

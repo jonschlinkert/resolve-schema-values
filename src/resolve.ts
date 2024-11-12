@@ -1,64 +1,13 @@
 import type { JSONSchema, ResolveOptions } from '~/types';
-import { evaluateCondition, validateValue } from '~/validate';
-import { schemaProps } from '~/schema-props';
 import { mergeSchemas } from '~/merge';
-
-const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-
-export const getValueType = (value: any, types: string | string[]): string | undefined => {
-  const typeArr = Array.isArray(types) ? types : [types];
-  if (value === null && typeArr.includes('null')) return 'null';
-  if (Array.isArray(value) && typeArr.includes('array')) return 'array';
-  if (isObject(value) && typeArr.includes('object')) return 'object';
-  if (typeof value === 'boolean' && typeArr.includes('boolean')) return 'boolean';
-  if (typeof value === 'string' && typeArr.includes('string')) return 'string';
-  if (typeof value === 'number' && typeArr.includes('number')) return 'number';
-  if (typeof value === 'number' && typeArr.includes('integer')) return 'integer';
-  return undefined;
-};
-
-export const filterProps = (schema: JSONSchema, valueType: string) => {
-  const typeProps = new Set(schemaProps[valueType]);
-  const filtered = { ...schema };
-
-  for (const key of Object.keys(schema)) {
-    if (!schemaProps.base.includes(key) && !typeProps.has(key)) {
-      delete filtered[key];
-    }
-  }
-
-  return filtered;
-};
-
-const isValidValueType = (value: any, type: string): boolean => {
-  if (Array.isArray(type)) {
-    return type.some(t => isValidValueType(value, t));
-  }
-
-  switch (type) {
-    case 'null': return value === null;
-    case 'array': return Array.isArray(value);
-    case 'object': return isObject(value);
-    case 'boolean': return typeof value === 'boolean';
-    case 'number': return typeof value === 'number';
-    case 'integer': return typeof value === 'number' && Number.isInteger(value);
-    case 'string': return typeof value === 'string';
-    default: return false;
-  }
-};
-
-export const getSegments = (
-  input: string,
-  options: {
-    language?: string;
-    granularity?: 'grapheme' | 'word' | 'sentence' | 'line',
-    localeMatcher: 'lookup' | 'best fit'
-  } = {}
-): Intl.SegmentData[] => {
-  const { language, granularity = 'grapheme', ...opts } = options;
-  const segmenter = new Intl.Segmenter(language, { granularity, ...opts });
-  return Array.from(segmenter.segment(input));
-};
+import {
+  getSegments,
+  isComposition,
+  isValidValueType,
+  filterProps,
+  getValueType,
+  isObject
+} from '~/utils';
 
 interface ValidationError {
   message: string;
@@ -95,6 +44,71 @@ const failure = (errors: ValidationError[], parent, key?: string): Failure => ({
   key
 });
 
+const isValidFormat = (value: string, format: string): boolean => {
+  switch (format) {
+    case 'date-time': return !isNaN(Date.parse(value));
+    case 'date': return /^\d{4}-\d{2}-\d{2}$/.test(value);
+    case 'time': return /^\d{2}:\d{2}:\d{2}$/.test(value);
+    case 'email': return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    case 'ipv4': return /^(\d{1,3}\.){3}\d{1,3}$/.test(value);
+    case 'uuid': return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    default: return true;
+  }
+};
+
+export const evaluateCondition = async (
+  schema: JSONSchema,
+  value: any,
+  options: ResolveOptions
+): Promise<boolean> => {
+  // For nested property conditions (used in resolution)
+  if (schema.properties && !options.skipPropertyCheck) {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    // Validate each property against its schema
+    for (const [prop, condition] of Object.entries(schema.properties)) {
+      if (condition.minimum !== undefined && (
+        !value.hasOwnProperty(prop) ||
+        value[prop] < condition.minimum
+      )) {
+        return false;
+      }
+
+      if (condition.maximum !== undefined && (
+        !value.hasOwnProperty(prop) ||
+        value[prop] > condition.maximum
+      )) {
+        return false;
+      }
+
+      const propValue = value[prop];
+      const resolved = await internalResolveValues(condition, propValue, {
+        ...options,
+        skipValidation: true,
+        skipConditional: true, // Prevent infinite recursion
+        currentPath: [...options.currentPath || [], prop]
+      });
+
+      if (!resolved.ok) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // For direct value validation
+  const resolved = await internalResolveValues(schema, value, {
+    ...options,
+    skipValidation: true,
+    skipConditional: true
+  });
+
+  return resolved.ok;
+};
+
 export const resolveNull = (schema: JSONSchema, value: any, parent, key?: string): Result<null> => {
   const errors: ValidationError[] = [];
 
@@ -122,6 +136,7 @@ export const resolveBoolean = (schema: JSONSchema, value: any, parent, key?: str
   return success(value, parent, key);
 };
 
+// eslint-disable-next-line complexity
 export const resolveInteger = (schema: JSONSchema, value: any, parent, key?: string): Result<number> => {
   const required = parent?.required || [];
   const errors: ValidationError[] = [];
@@ -153,6 +168,18 @@ export const resolveInteger = (schema: JSONSchema, value: any, parent, key?: str
 
   if (schema.maximum !== undefined && value > schema.maximum) {
     errors.push({ message: `Value must be <= ${schema.maximum}` });
+  }
+
+  if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) {
+    errors.push({ message: `Value must be > ${schema.exclusiveMinimum}` });
+  }
+
+  if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) {
+    errors.push({ message: `Value must be < ${schema.exclusiveMaximum}` });
+  }
+
+  if (schema.multipleOf !== undefined && value % schema.multipleOf !== 0) {
+    errors.push({ message: `Value must be a multiple of ${schema.multipleOf}` });
   }
 
   if (errors.length > 0) {
@@ -189,6 +216,18 @@ export const resolveNumber = (schema: JSONSchema, value: any, parent, key?: stri
 
   if (schema.maximum !== undefined && value > schema.maximum) {
     errors.push({ message: `Value must be <= ${schema.maximum}` });
+  }
+
+  if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) {
+    errors.push({ message: `Value must be > ${schema.exclusiveMinimum}` });
+  }
+
+  if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) {
+    errors.push({ message: `Value must be < ${schema.exclusiveMaximum}` });
+  }
+
+  if (schema.multipleOf !== undefined && value % schema.multipleOf !== 0) {
+    errors.push({ message: `Value must be a multiple of ${schema.multipleOf}` });
   }
 
   if (errors.length > 0) {
@@ -240,6 +279,10 @@ export const resolveString = (schema: JSONSchema, value: any, parent, key?: stri
     errors.push({ message: `String must match pattern: ${schema.pattern}` });
   }
 
+  if (schema.format && !isValidFormat(value, schema.format)) {
+    errors.push({ message: `Invalid ${schema.format} format` });
+  }
+
   if (errors.length > 0) {
     return failure(errors, parent, key);
   }
@@ -254,10 +297,6 @@ export const resolveConditional = async (
   parent,
   key?: string
 ): Promise<Result<any>> => {
-  if (!schema.if) {
-    return success(value, parent, key);
-  }
-
   const isSatisfied = await evaluateCondition(schema.if, value, options);
   const conditionalSchema = isSatisfied ? schema.then : schema.else;
 
@@ -318,19 +357,19 @@ export const resolveAnyOf = async (
   const errors: ValidationError[] = [];
 
   for (const subSchema of schema.anyOf) {
-    const validation = await validateValue(value, subSchema, options);
-    if (validation.length === 0) {
+    const resolved = await internalResolveValues(subSchema, value, options, parent, key);
+    if (resolved.ok) {
       return success(value, parent, key);
     }
 
-    errors.push(...validation.map(err => ({ message: err.message, path: err.path })));
+    errors.push(...resolved.errors);
   }
 
   if (schema.default !== undefined) {
     return success(schema.default, parent, key);
   }
 
-  return failure(errors, parent, key);
+  return failure([{ message: 'Value must match at least one schema in anyOf' }], parent, key);
 };
 
 export const resolveOneOf = async (
@@ -345,12 +384,12 @@ export const resolveOneOf = async (
   const errors: ValidationError[] = [];
 
   for (const subSchema of schema.oneOf) {
-    const validation = await validateValue(value, subSchema, options);
-    if (validation.length === 0) {
+    const resolved = await internalResolveValues(subSchema, value, options, parent, key);
+    if (resolved.ok) {
       validCount++;
       validResult = value;
     } else {
-      errors.push(...validation.map(err => ({ message: err.message, path: err.path })));
+      errors.push(...resolved.errors);
     }
   }
 
@@ -359,7 +398,7 @@ export const resolveOneOf = async (
       return success(schema.default, parent, key);
     }
 
-    return failure(errors, parent, key);
+    return failure([{ message: 'Value must match exactly one schema in oneOf' }], parent, key);
   }
 
   return success(validResult, parent, key);
@@ -383,6 +422,7 @@ export const resolveComposition = async (
   if (schema.oneOf) {
     return resolveOneOf(schema, value, options, parent, key);
   }
+
   return success(value, parent, key);
 };
 
@@ -481,7 +521,7 @@ export const resolvePatternProperties = async (
             });
           }
         } else {
-          newResult[key] = resolved.value;
+          newResult[k] = resolved.value;
         }
       }
     }
@@ -561,6 +601,7 @@ export const resolveArray = async (
     }
 
     errors.push({ message: 'Value must be an array' });
+    return failure(errors, parent, key);
   }
 
   if (schema.minItems !== undefined && value.length < schema.minItems) {
@@ -571,8 +612,26 @@ export const resolveArray = async (
     errors.push({ message: `Array length must be <= ${schema.maxItems}` });
   }
 
-  if (schema.uniqueItems && new Set(value).size !== value.length) {
+  if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) {
     errors.push({ message: 'Array items must be unique' });
+  }
+
+  if (schema.contains) {
+    let containsValid = false;
+    for (let i = 0; i < value.length; i++) {
+      const resolved = await internalResolveValues(schema.contains, value[i], {
+        ...options,
+        currentPath: [i.toString()]
+      });
+
+      if (resolved.ok) {
+        containsValid = true;
+        break;
+      }
+    }
+    if (!containsValid) {
+      errors.push({ message: 'Array must contain at least one matching item' });
+    }
   }
 
   if (errors.length > 0) {
@@ -589,25 +648,41 @@ export const resolveArrayItems = async (
   parent,
   key?: string
 ): Promise<Result<any[]>> => {
-  if (!schema.items) {
+  if (!schema.items && !schema.prefixItems) {
     return success(values, parent, key);
   }
 
   const result = [];
   const errors: ValidationError[] = [];
+  const maxLength = Math.max(values.length, schema.prefixItems?.length || 0);
 
-  for (let i = 0; i < values.length; i++) {
-    const resolved = await internalResolveValues(schema.items, values[i], options, parent, i.toString());
-
-    if (!resolved.ok) {
-      for (const error of resolved.errors) {
-        errors.push({
-          message: error.message,
-          path: error.path ? [i.toString(), ...error.path] : [i.toString()]
-        });
+  for (let i = 0; i < maxLength; i++) {
+    if (schema.prefixItems && i < schema.prefixItems.length) {
+      const resolved = await internalResolveValues(schema.prefixItems[i], values[i], options, parent, i.toString());
+      if (!resolved.ok) {
+        for (const error of resolved.errors) {
+          errors.push({
+            message: error.message,
+            path: error.path ? [i.toString(), ...error.path] : [i.toString()]
+          });
+        }
+      } else {
+        result.push(resolved.value);
+      }
+    } else if (schema.items) {
+      const resolved = await internalResolveValues(schema.items, values[i], options, parent, i.toString());
+      if (!resolved.ok) {
+        for (const error of resolved.errors) {
+          errors.push({
+            message: error.message,
+            path: error.path ? [i.toString(), ...error.path] : [i.toString()]
+          });
+        }
+      } else {
+        result.push(resolved.value);
       }
     } else {
-      result.push(resolved.value);
+      result.push(values[i]);
     }
   }
 
@@ -618,6 +693,7 @@ export const resolveArrayItems = async (
   return success(result, parent, key);
 };
 
+// eslint-disable-next-line complexity
 export const resolveObject = async (
   schema: JSONSchema,
   value: any,
@@ -642,6 +718,15 @@ export const resolveObject = async (
     }
 
     errors.push({ message: 'Value must be an object' });
+    return failure(errors, parent, key);
+  }
+
+  if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) {
+    errors.push({ message: `Object must have >= ${schema.minProperties} properties` });
+  }
+
+  if (schema.maxProperties !== undefined && Object.keys(value).length > schema.maxProperties) {
+    errors.push({ message: `Object must have <= ${schema.maxProperties} properties` });
   }
 
   if (schema.required) {
@@ -655,6 +740,24 @@ export const resolveObject = async (
           value[key] = defaultValue;
         } else {
           errors.push({ message: `Missing required property: ${key}`, path: [key] });
+        }
+      }
+    }
+  }
+
+  if (schema.propertyNames) {
+    for (const propName in value) {
+      const resolved = await internalResolveValues(schema.propertyNames, propName, {
+        ...options,
+        currentPath: [propName]
+      });
+
+      if (!resolved.ok) {
+        for (const error of resolved.errors) {
+          errors.push({
+            message: error.message,
+            path: [propName, ...error.path || []]
+          });
         }
       }
     }
@@ -735,6 +838,17 @@ export const resolveValue = async (
     errors.push({ message: `Value must be one of: ${schema.enum.join(', ')}` });
   }
 
+  if (schema.not && !options.skipValidation) {
+    const notResult = await internalResolveValues(schema.not, value, {
+      ...options,
+      skipValidation: true
+    });
+
+    if (notResult.ok) {
+      errors.push({ message: 'Value must not match schema' });
+    }
+  }
+
   if (errors.length > 0) {
     return failure(errors, parent, key);
   }
@@ -758,14 +872,16 @@ export const internalResolveValues = async (
 
   result = valueResult.value;
 
-  if (isObject(result)) {
+  if (isObject(result) && schema.if) {
     const conditionalResult = await resolveConditional(schema, result, options, parent, key);
     if (!conditionalResult.ok) {
       return conditionalResult;
     }
 
     result = conditionalResult.value;
+  }
 
+  if (isObject(result) && isComposition(schema)) {
     const compositionResult = await resolveComposition(schema, result, options, parent, key);
     if (!compositionResult.ok) {
       return compositionResult;

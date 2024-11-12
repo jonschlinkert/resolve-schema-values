@@ -1,13 +1,11 @@
 import type { JSONSchema, ResolveOptions, ValidationError } from '~/types';
+import { mergeSchemas } from '~/merge';
+import { isObject } from '~/utils';
 
 export const createError = (path: string[], message: string): ValidationError => ({
   path,
   message
 });
-
-export const isObject = (value: any): value is Record<string, any> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-};
 
 export const validateString = (
   value: any,
@@ -337,50 +335,61 @@ export const validateValue = async (
   }
 
   if (schema.if && !options.skipConditional) {
-    const satisfied = await evaluateCondition(schema.if, value, {
+    const { if: ifSchema, then: thenSchema, else: elseSchema, ...parentSchema } = schema;
+
+    const mergedIfSchema = mergeSchemas(parentSchema, ifSchema);
+    const satisfied = await evaluateCondition(mergedIfSchema, value, {
       ...options,
       skipPropertyCheck: false // Use direct value validation for conditions
     });
 
-    if (satisfied && schema.then) {
-      const thenErrors = await validateValue(value, schema.then, options);
+    if (satisfied && thenSchema) {
+      const mergedThenSchema = mergeSchemas(parentSchema, thenSchema);
+      const thenErrors = await validateValue(value, mergedThenSchema, options);
       errors.push(...thenErrors);
-    }
-
-    if (!satisfied && schema.else) {
-      const elseErrors = await validateValue(value, schema.else, options);
+    } else if (!satisfied && elseSchema) {
+      const mergedElseSchema = mergeSchemas(parentSchema, elseSchema);
+      const elseErrors = await validateValue(value, mergedElseSchema, options);
       errors.push(...elseErrors);
     }
   }
 
   if (schema.allOf) {
-    for (let i = 0; i < schema.allOf.length; i++) {
-      const subErrors = await validateValue(value, schema.allOf[i], options);
+    const { allOf, ...parentSchema } = schema;
+    const schemas = allOf.map(subSchema => mergeSchemas(parentSchema, subSchema));
+
+    for (const subSchema of schemas) {
+      const subErrors = await validateValue(value, subSchema, { ...options, isAllOf: true });
       errors.push(...subErrors);
     }
   }
 
   if (schema.anyOf) {
-    const anyOfErrors: ValidationError[][] = [];
-    for (let i = 0; i < schema.anyOf.length; i++) {
-      const subErrors = await validateValue(value, schema.anyOf[i], options);
-      anyOfErrors.push(subErrors);
+    const { anyOf, ...parentSchema } = schema;
+    let validSchema = false;
+
+    for (const subSchema of anyOf) {
+      const anyOfSchema = mergeSchemas(parentSchema, subSchema);
+      const subErrors = await validateValue(value, anyOfSchema, options);
+
       if (subErrors.length === 0) {
+        validSchema = true;
         break;
       }
     }
-    if (!anyOfErrors.some(errs => errs.length === 0)) {
+
+    if (!validSchema) {
       errors.push(createError(path, 'Value must match at least one schema in anyOf'));
     }
   }
 
   if (schema.oneOf) {
-    const oneOfErrors: ValidationError[][] = [];
+    const { oneOf, ...baseSchema } = schema;
     let validCount = 0;
 
-    for (let i = 0; i < schema.oneOf.length; i++) {
-      const subErrors = await validateValue(value, schema.oneOf[i], options);
-      oneOfErrors.push(subErrors);
+    for (const subSchema of oneOf) {
+      const mergedSchema = mergeSchemas(baseSchema, subSchema);
+      const subErrors = await validateValue(value, mergedSchema, options);
 
       if (subErrors.length === 0) {
         validCount++;
@@ -392,22 +401,28 @@ export const validateValue = async (
     }
   }
 
+  if (schema.not && !options.skipValidation) {
+    const { not, ...baseSchema } = schema;
+    const mergedSchema = mergeSchemas(baseSchema, not);
+
+    const notErrors = await validateValue(value, mergedSchema, {
+      ...options,
+      skipValidation: true
+    });
+
+    if (notErrors.length === 0) {
+      errors.push(createError(path, 'Value must not match schema'));
+    }
+  }
+
   // Type-specific validation
   if (schema.type) {
     switch (schema.type) {
-      case 'string':
-        errors.push(...validateString(value, schema, path));
-        break;
+      case 'string': errors.push(...validateString(value, schema, path)); break;
       case 'number':
-      case 'integer':
-        errors.push(...validateNumber(value, schema, path));
-        break;
-      case 'array':
-        errors.push(...await validateArray(value, schema, options));
-        break;
-      case 'object':
-        errors.push(...await validateObject(value, schema, options));
-        break;
+      case 'integer': errors.push(...validateNumber(value, schema, path)); break;
+      case 'array': errors.push(...await validateArray(value, schema, options)); break;
+      case 'object': errors.push(...await validateObject(value, schema, options)); break;
       case 'boolean':
         if (typeof value !== 'boolean') {
           errors.push(createError(path, 'Value must be a boolean'));
