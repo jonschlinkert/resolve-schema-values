@@ -674,6 +674,7 @@ describe('resolve', () => {
           email: 'john@example.com',
           country: 'USA'
         });
+
         assert.ok(result.ok);
         assert.deepStrictEqual(result.value, {
           name: 'John',
@@ -708,6 +709,7 @@ describe('resolve', () => {
           username: 'johndoe'
           // missing password and role
         });
+
         assert.ok(!result.ok);
         assert.strictEqual(result.errors.length, 2);
       });
@@ -846,7 +848,7 @@ describe('resolve', () => {
         dependentSchemas: {
           credit_card: {
             properties: {
-              billing_address: { type: 'string', default: 'required' }
+              billing_address: { type: 'string', default: '111222 abc' }
             }
           }
         }
@@ -859,7 +861,7 @@ describe('resolve', () => {
       assert.ok(result.ok);
       assert.deepStrictEqual(result.value, {
         credit_card: '1234-5678-9012-3456',
-        billing_address: 'required'
+        billing_address: '111222 abc'
       });
     });
   });
@@ -1469,11 +1471,10 @@ describe('resolve', () => {
           a: { type: 'string' },
           b: { type: 'string' }
         },
-        allOf: [{ not: { required: ['a', 'b'] } }]
+        not: { required: ['a', 'b'] }
       };
 
       const validResult = await resolveValues(schema, { a: 'test' });
-      console.log(validResult.errors);
       assert.ok(validResult.ok);
       assert.strictEqual(validResult.value.a, 'test');
 
@@ -1489,16 +1490,46 @@ describe('resolve', () => {
           a: { type: 'string' },
           b: { type: 'string' }
         },
-        allOf: [{ not: { required: ['b'] } }, { not: { required: ['a'] } }]
+        allOf: [
+          { not: { required: ['a', 'b'] } }
+        ]
       };
 
-      const validResult = await resolveValues(schema, { a: 'test' });
-      assert.ok(validResult.ok);
-      assert.strictEqual(validResult.value.a, 'test');
+      const result1 = await resolveValues(schema, { a: 'foo' });
 
-      const invalidResult = await resolveValues(schema, { a: 'test', b: 'test' });
-      assert.ok(!invalidResult.ok);
-      assert.strictEqual(invalidResult.errors[0].message, 'Value must not match schema');
+      assert.ok(result1.ok);
+      assert.strictEqual(result1.value.a, 'foo');
+
+      const result2 = await resolveValues(schema, { a: 'bar' });
+
+      assert.ok(result2.ok);
+      assert.strictEqual(result2.value.a, 'bar');
+
+      const result3 = await resolveValues(schema, { a: 'foo', b: 'bar' });
+      assert.ok(!result3.ok);
+      assert.strictEqual(result3.errors[0].message, 'Value must not match schema');
+    });
+
+    it('should enforce mutually exclusive properties via not/required', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          a: { type: 'string' },
+          b: { type: 'string' }
+        },
+        allOf: [
+          { not: { required: ['b'] } },
+          { not: { required: ['a'] } }
+        ]
+      };
+
+      const result1 = await resolveValues(schema, { a: 'test' });
+      assert.ok(!result1.ok);
+      assert.strictEqual(result1.errors[0].message, 'Value must not match schema');
+
+      const result2 = await resolveValues(schema, { a: 'test', b: 'test' });
+      assert.ok(!result2.ok);
+      assert.strictEqual(result2.errors[0].message, 'Value must not match schema');
     });
 
     it('should enforce exactly one property via oneOf/required', async () => {
@@ -1564,6 +1595,27 @@ describe('resolve', () => {
   });
 
   describe('dependent required properties', () => {
+    it('should enforce dependent required properties', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          value: { type: 'string' },
+          format: { type: 'string' }
+        },
+        if: { properties: { type: { const: 'special' } } },
+        then: { required: ['value'] }
+      };
+
+      const validNormal = await resolveValues(schema, { type: 'normal' });
+      assert.ok(validNormal.ok);
+
+      const invalidMissingValue = await resolveValues(schema, { type: 'special' });
+
+      assert.ok(!invalidMissingValue.ok);
+      assert.strictEqual(invalidMissingValue.errors[0].message, 'Missing required property: value');
+    });
+
     it('should enforce dependent required properties across multiple conditions', async () => {
       const schema: JSONSchema = {
         type: 'object',
@@ -1585,11 +1637,139 @@ describe('resolve', () => {
       };
 
       const validNormal = await resolveValues(schema, { type: 'normal' });
-      assert.ok(validNormal.ok);
+      assert.ok(validNormal.ok); // This should pass since no conditions are triggered.
+
+      const invalidMissingValue = await resolveValues(schema, { type: 'special' });
+      assert.ok(!invalidMissingValue.ok);
+      assert.strictEqual(invalidMissingValue.errors[0].message, 'Missing required property: value');
 
       const invalidMissingFormat = await resolveValues(schema, { type: 'special', value: 'test' });
       assert.ok(!invalidMissingFormat.ok);
       assert.strictEqual(invalidMissingFormat.errors[0].message, 'Missing required property: format');
+    });
+
+    it('should enforce conditions based on specific items in an array', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: [
+          { type: 'string' },
+          {
+            type: 'object',
+            properties: {
+              requiredField: { type: 'string' }
+            },
+            required: ['requiredField']
+          }
+        ],
+        if: {
+          contains: { type: 'string', const: 'specialItem' }
+        },
+        then: {
+          contains: { type: 'object', required: ['requiredField'] }
+        }
+      };
+
+      const validArray = await resolveValues(schema, ['normalItem', { requiredField: 'value' }]);
+      assert.ok(validArray.ok);
+
+      const invalidArray = await resolveValues(schema, ['specialItem', {}]);
+      assert.ok(!invalidArray.ok);
+      assert.strictEqual(invalidArray.errors[0].message, 'Array must contain at least one matching item');
+    });
+
+    it('should enforce conditions across nested arrays', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'array',
+          items: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                nestedField: { type: 'string' }
+              },
+              required: ['nestedField']
+            }
+          ]
+        },
+        allOf: [
+          {
+            if: {
+              contains: {
+                type: 'array',
+                contains: { type: 'string', const: 'trigger' }
+              }
+            },
+            then: {
+              contains: {
+                type: 'array',
+                contains: { type: 'object', required: ['nestedField'] }
+              }
+            }
+          }
+        ]
+      };
+
+      // Scenario: Nested arrays without 'trigger'
+      const validNestedArrays = await resolveValues(schema, [['item1', { nestedField: 'value' }]]);
+      assert.ok(validNestedArrays.ok);
+
+      // Scenario: Nested arrays with 'trigger' but missing 'nestedField' in the object
+      const invalidNestedArrays = await resolveValues(schema, [['trigger', {}]]);
+      assert.ok(!invalidNestedArrays.ok);
+      assert.strictEqual(invalidNestedArrays.errors[0].message, 'Array must contain at least one matching item');
+    });
+
+    it('should enforce item types conditionally with arrays', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: { type: 'string' },
+        if: {
+          contains: { const: 'trigger' }
+        },
+        then: {
+          items: { type: 'number' }
+        }
+      };
+
+      const result = await resolveValues(schema, ['one', 'two']);
+      assert.ok(result.ok);
+
+      const result2 = await resolveValues(schema, ['trigger', 'notANumber']);
+      assert.ok(!result2.ok);
+      assert.strictEqual(result2.errors[0].message, 'Value must be a number');
+    });
+
+    it('should enforce conditions based on item presence', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: { type: 'string' },
+        allOf: [
+          {
+            if: { contains: { const: 'error' } },
+            then: { minItems: 3 }
+          },
+          {
+            if: { contains: { const: 'warning' } },
+            then: { maxItems: 3 }
+          }
+        ]
+      };
+
+      const validArrayWithError = await resolveValues(schema, ['error', 'more', 'items']);
+      assert.ok(validArrayWithError.ok);
+
+      const invalidArrayWithError = await resolveValues(schema, ['error', 'less']);
+      assert.ok(!invalidArrayWithError.ok);
+      assert.strictEqual(invalidArrayWithError.errors[0].message, 'Array length must be >= 3');
+
+      const validArrayWithWarning = await resolveValues(schema, ['warning', 'still', 'valid']);
+      assert.ok(validArrayWithWarning.ok);
+
+      const invalidArrayWithWarning = await resolveValues(schema, ['warning', 'too', 'many', 'items']);
+      assert.ok(!invalidArrayWithWarning.ok);
+      assert.strictEqual(invalidArrayWithWarning.errors[0].message, 'Array length must be <= 3');
     });
   });
 

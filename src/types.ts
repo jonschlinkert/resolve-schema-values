@@ -52,11 +52,6 @@ export interface JSONSchema {
   oneOf?: JSONSchema[];
 }
 
-export interface ValidationError {
-  path: string[];
-  message: string;
-}
-
 export interface ResolveOptions {
   skipValidation?: boolean;
   currentPath?: string[];
@@ -66,3 +61,24 @@ export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
 }
+
+export interface ValidationError {
+  message: string;
+  path?: string[];
+}
+
+export interface Success<T> {
+  ok: true;
+  value: T;
+  parent: any;
+  key?: string;
+}
+
+export interface Failure {
+  ok: false;
+  errors: ValidationError[];
+  parent: any;
+  key?: string;
+}
+
+export type Result<T> = Success<T> | Failure;

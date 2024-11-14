@@ -76,28 +76,39 @@ export const mergeTypes = (schema1: JSONSchema, schema2: JSONSchema, options) =>
   return type;
 };
 
+const isSameConst = (value1, value2) => {
+  const v1 = [].concat(value1);
+  const v2 = [].concat(value2);
+  return v1.length === 1 && v2.length === 1 && v1[0] === v2[0];
+};
+
 // eslint-disable-next-line complexity
 export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {}, options = {}): JSONSchema => {
   const result: JSONSchema = { ...schema1, ...schema2 };
 
-  if (schema1.type && schema2.type && schema1.type !== schema2.type) {
-    const type = mergeTypes(schema1, schema2, options);
+  if (options.mergeType === true) {
+    if (schema1.type && schema2.type && schema1.type !== schema2.type) {
+      const type = mergeTypes(schema1, schema2, options);
 
-    if (type.errors) {
-      return type;
+      if (type.errors) {
+        return type;
+      }
+
+      result.type = type;
     }
-
-    result.type = type;
   }
 
-  // Merge validation keywords
-  if (schema1.const !== undefined || schema2.const !== undefined) {
-    result.const = schema2.const ?? schema1.const;
-  }
-
-  if (schema1.enum || schema2.enum) {
-    result.enum = mergeArrays(schema1.enum, schema2.enum);
-  }
+  // if (schema1.enum || schema2.enum || schema1.const || schema2.const) {
+  //   if (isSameConst(schema1.const, schema2.enum) || isSameConst(schema2.const, schema1.enum)) {
+  //     const value = schema1.const || schema2.const || schema1.enum || schema2.enum;
+  //     result.const = [].concat(value)[0];
+  //     delete result.enum;
+  //   } else {
+  //     result.enum = mergeArrays(schema1.enum, schema2.enum);
+  //   }
+  // } else if (schema1.const !== undefined || schema2.const !== undefined) {
+  //   result.const = schema2.const ?? schema1.const;
+  // }
 
   // Merge number validation
   result.minimum = schema2.minimum ?? schema1.minimum;
@@ -179,6 +190,11 @@ export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {},
     result.if = schema2.if ?? schema1.if;
     result.then = schema2.then ?? schema1.then;
     result.else = schema2.else ?? schema1.else;
+  }
+
+  // Merge boolean schemas
+  if (schema1.not || schema2.not) {
+    result.not = mergeSchemas(schema1.not, schema2.not);
   }
 
   // Merge composition keywords
