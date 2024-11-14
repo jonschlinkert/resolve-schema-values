@@ -5,8 +5,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     merge: 'src/merge.ts',
-    resolve: 'src/resolve.ts',
-    validate: 'src/validate.ts'
+    resolve: 'src/resolve.ts'
   },
   cjsInterop: true,
   format: ['cjs', 'esm'],
