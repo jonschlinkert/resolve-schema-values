@@ -41,6 +41,7 @@
     "@typescript-eslint/parser": "^8.12.2",
     "esbuild-register": "^3.5.0",
     "eslint": "^8.57.0",
+    "get-value": "^3.0.1",
     "gulp-format-md": "^2.0.0",
     "prettier": "^3.3.3",
     "ts-mocha": "^10.0.0",

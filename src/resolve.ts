@@ -6,12 +6,9 @@ import {
   filterProps,
   getSegments,
   getValueType,
-  inspect,
   isComposition,
-  isEmpty,
   isObject
 } from '~/utils';
-import { ok } from 'assert';
 
 interface ValidationError {
   message: string;
@@ -35,11 +32,14 @@ interface Failure {
 type Result<T> = Success<T> | Failure;
 
 class SchemaResolver {
-  private readonly options: ResolveOptions;
+  private readonly options: ResolveOptions & { getValue?: (obj: any, key: string) => any };
   private negationDepth: number;
 
   constructor(options: ResolveOptions = {}) {
-    this.options = { ...options };
+    this.options = {
+      ...options,
+      getValue: options.getValue || ((obj, key) => obj?.[key])
+    };
     this.negationDepth = 0;
     this.stack = [];
   }
@@ -74,7 +74,6 @@ class SchemaResolver {
     }
   }
 
-  // eslint-disable-next-line complexity
   private async evaluateCondition(
     schema: JSONSchema,
     value: any,
@@ -82,6 +81,7 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<boolean> {
+    const { getValue = this.options.getValue } = options;
 
     if (schema.contains?.const && !value?.some(item => item === schema.contains?.const)) {
       return false;
@@ -92,16 +92,9 @@ class SchemaResolver {
         return false;
       }
 
-      // for (let i = 0; i < value.length; i++) {
-      //   const isSatisfield = await this.evaluateCondition(schema.items, value[i], parent, key);
-
-      //   if (!isSatisfield) {
-      //     return false;
-      //   }
-      // }
-
       for (let i = 0; i < value.length; i++) {
-        const resolved = await this.internalResolveValues(schema.items, value[i], parent, key, {
+        const itemValue = getValue(value, String(i));
+        const resolved = await this.internalResolveValues(schema.items, itemValue, parent, key, {
           ...options,
           currentPath: [i]
         });
@@ -114,16 +107,14 @@ class SchemaResolver {
       return true;
     }
 
-    // For nested property conditions (used in resolution)
     if (schema.properties) {
       if (!isObject(value)) {
         return false;
       }
 
-      // Validate each property against its schema
       for (const [prop, condition] of Object.entries(schema.properties)) {
         const parentProp = parent?.properties?.[prop];
-        const propValue = value[prop];
+        const propValue = getValue(value, prop);
 
         if (propValue === undefined) {
           if (condition.default !== undefined) {
@@ -137,7 +128,7 @@ class SchemaResolver {
         const resolved = await this.internalResolveValues(propSchema, propValue, schema, prop, {
           ...options,
           skipValidation: true,
-          skipConditional: true // Prevent infinite recursion
+          skipConditional: true
         });
 
         if (!resolved.ok) {
@@ -148,11 +139,10 @@ class SchemaResolver {
       return true;
     }
 
-    // For direct value validation
     const resolved = await this.internalResolveValues(schema, value, parent, key, {
       ...options,
       skipValidation: true,
-      skipConditional: true // Prevent infinite recursion
+      skipConditional: true
     });
 
     return resolved.ok;
@@ -185,7 +175,6 @@ class SchemaResolver {
     return this.success(value, parent, key);
   }
 
-  // eslint-disable-next-line complexity
   private async resolveInteger(schema: JSONSchema, value: any, parent, key?: string): Result<number> {
     const required = parent?.required || [];
     const errors: ValidationError[] = [];
@@ -238,7 +227,6 @@ class SchemaResolver {
     return this.success(value, parent, key);
   }
 
-  // eslint-disable-next-line complexity
   private async resolveNumber(schema: JSONSchema, value: any, parent, key?: string): Result<number> {
     const required = parent?.required || [];
     const errors: ValidationError[] = [];
@@ -481,7 +469,6 @@ class SchemaResolver {
         return this.failure([{ message: 'Value must not match schema' }], parent, key);
       }
 
-      // Proceed with the rest schema if any constraints exist
       return this.internalResolveValues(partialSchema, value, parent, 'not', options);
     } finally {
       this.negationDepth--;
@@ -489,26 +476,21 @@ class SchemaResolver {
   }
 
   private resolveNotRequired(schema: JSONSchema, value: any): boolean {
-    // Handle the case where we have multiple not/allOf conditions
+    const { getValue = this.options.getValue } = {};
+
     if (schema.allOf) {
       const notSchemas = schema.allOf.filter(s => s.not?.required);
       if (notSchemas.length > 0) {
-        // If we have multiple not conditions, all must be satisfied
         return notSchemas.every(s => {
-          // Each not condition must be satisfied
           const requiredProps = s.not.required;
-          // For a single not condition with multiple required props,
-          // at least one must be absent (NOT all required)
-          return !requiredProps.every(prop => value[prop] !== undefined);
+          return !requiredProps.every(prop => getValue(value, prop) !== undefined);
         });
       }
     }
 
-    // Handle single not condition
     if (schema.not?.required) {
       const requiredProps = schema.not.required;
-      // For a single not condition, at least one required prop must be absent
-      return !requiredProps.every(prop => value[prop] !== undefined);
+      return !requiredProps.every(prop => getValue(value, prop) !== undefined);
     }
 
     return true;
@@ -549,6 +531,7 @@ class SchemaResolver {
   ): Promise<Result<any[]>> {
     const errors: ValidationError[] = [];
     const required = parent?.required || [];
+    const { getValue = this.options.getValue } = options;
 
     if (!Array.isArray(value)) {
       if (value === undefined || value === null) {
@@ -583,7 +566,8 @@ class SchemaResolver {
     if (schema.contains) {
       let containsValid = false;
       for (let i = 0; i < value.length; i++) {
-        const resolved = await this.internalResolveValues(schema.contains, value[i], parent, key, {
+        const itemValue = getValue(value, String(i));
+        const resolved = await this.internalResolveValues(schema.contains, itemValue, parent, key, {
           ...options,
           currentPath: [i]
         });
@@ -612,6 +596,8 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<Result<any[]>> {
+    const { getValue = this.options.getValue } = options;
+
     if (!schema.items && !schema.prefixItems) {
       return this.success(values, parent, key);
     }
@@ -622,10 +608,10 @@ class SchemaResolver {
 
     if (Array.isArray(schema.items)) {
       for (let i = 0; i < values.length; i++) {
-        const value = values[i];
+        const itemValue = getValue(values, String(i));
 
         if (i < schema.items.length) {
-          const resolved = await this.internalResolveValues(schema.items[i], value, parent, i, options);
+          const resolved = await this.internalResolveValues(schema.items[i], itemValue, parent, i, options);
 
           if (!resolved.ok) {
             for (const error of resolved.errors) {
@@ -641,7 +627,7 @@ class SchemaResolver {
           errors.push({ message: 'Additional items not allowed' });
           break;
         } else if (schema.additionalItems) {
-          const resolved = await this.internalResolveValues(schema.additionalItems, value, parent, i, options);
+          const resolved = await this.internalResolveValues(schema.additionalItems, itemValue, parent, i, options);
 
           if (!resolved.ok) {
             for (const error of resolved.errors) {
@@ -662,8 +648,10 @@ class SchemaResolver {
     }
 
     for (let i = 0; i < maxLength; i++) {
+      const itemValue = getValue(values, String(i));
+
       if (schema.prefixItems && i < schema.prefixItems.length) {
-        const resolved = await this.internalResolveValues(schema.prefixItems[i], values[i], parent, i, options);
+        const resolved = await this.internalResolveValues(schema.prefixItems[i], itemValue, parent, i, options);
 
         if (!resolved.ok) {
           for (const error of resolved.errors) {
@@ -675,8 +663,8 @@ class SchemaResolver {
         } else {
           result.push(resolved.value);
         }
-      } else if (schema.items) {
-        const resolved = await this.internalResolveValues(schema.items, values[i], parent, i, options);
+      } else if (isObject(schema.items)) {
+        const resolved = await this.internalResolveValues(schema.items, itemValue, parent, i, options);
         if (!resolved.ok) {
           for (const error of resolved.errors) {
             errors.push({
@@ -688,7 +676,7 @@ class SchemaResolver {
           result.push(resolved.value);
         }
       } else {
-        result.push(values[i]);
+        result.push(itemValue);
       }
     }
 
@@ -699,7 +687,6 @@ class SchemaResolver {
     return this.success(result, parent, key);
   }
 
-  // eslint-disable-next-line complexity
   private async resolveObject(
     schema: JSONSchema,
     value: any,
@@ -709,6 +696,7 @@ class SchemaResolver {
   ): Promise<Result<any>> {
     const errors: ValidationError[] = [];
     const required = parent?.required || [];
+    const { getValue = this.options.getValue } = options;
 
     if (!isObject(value)) {
       if (value === undefined || value === null) {
@@ -723,11 +711,13 @@ class SchemaResolver {
           return this.failure(errors, parent, key);
         }
 
-        return this.success({}, parent, key);
+        // Instead of returning early, set value to empty object and continue
+        // This allows for default values to be set for nested properties
+        value = {};
+      } else {
+        errors.push({ message: 'Value must be an object' });
+        return this.failure(errors, parent, key);
       }
-
-      errors.push({ message: 'Value must be an object' });
-      return this.failure(errors, parent, key);
     }
 
     if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) {
@@ -743,16 +733,17 @@ class SchemaResolver {
         errors.push({ message: 'Object does not satisfy required property constraints' });
       }
     } else if (schema.required) {
-      for (const key of schema.required) {
-        const prop = schema.properties?.[key];
+      for (const propKey of schema.required) {
+        const prop = schema.properties?.[propKey];
+        const propValue = getValue(value, propKey);
 
-        if (!(key in value)) {
+        if (propValue === undefined) {
           const defaultValue = prop?.default;
 
           if (defaultValue !== undefined) {
-            value[key] = defaultValue;
+            value[propKey] = defaultValue;
           } else {
-            errors.push({ message: `Missing required property: ${key}`, path: [key] });
+            errors.push({ message: `Missing required property: ${propKey}`, path: [propKey] });
           }
         }
       }
@@ -818,14 +809,17 @@ class SchemaResolver {
   ): Promise<Result<Record<string, any>>> {
     const result: Record<string, any> = {};
     const errors: ValidationError[] = [];
+    const { getValue = this.options.getValue } = options;
 
     for (const [propKey, propSchema] of Object.entries(properties)) {
-      if (value?.[propKey] === undefined && propSchema.default !== undefined) {
+      const propValue = getValue(value, propKey);
+
+      if (propValue === undefined && propSchema.default !== undefined) {
         result[propKey] = propSchema.default;
         continue;
       }
 
-      const resolved = await this.internalResolveValues(propSchema, value?.[propKey], parent, propKey, options);
+      const resolved = await this.internalResolveValues(propSchema, propValue, parent, propKey, options);
 
       if (!resolved.ok) {
         for (const error of resolved.errors) {
@@ -858,6 +852,7 @@ class SchemaResolver {
       return this.success(result, parent, key);
     }
 
+    const { getValue = this.options.getValue } = options;
     const newResult = { ...result };
     const errors: ValidationError[] = [];
 
@@ -866,7 +861,8 @@ class SchemaResolver {
 
       for (const [k, v] of Object.entries(value)) {
         if (regex.test(k) && !(k in newResult)) {
-          const resolved = await this.internalResolveValues(propSchema, v, parent, k, options);
+          const propValue = getValue(value, k);
+          const resolved = await this.internalResolveValues(propSchema, propValue, parent, k, options);
           if (!resolved.ok) {
             for (const error of resolved.errors) {
               errors.push({
@@ -900,13 +896,15 @@ class SchemaResolver {
       return this.success(result, parent, key);
     }
 
+    const { getValue = this.options.getValue } = options;
     const newResult = { ...result };
     const errors: ValidationError[] = [];
 
     for (const [k, v] of Object.entries(value)) {
       if (!newResult.hasOwnProperty(k)) {
+        const propValue = getValue(value, k);
         if (typeof schema.additionalProperties === 'object') {
-          const resolved = await this.internalResolveValues(schema.additionalProperties, v, parent, k, options);
+          const resolved = await this.internalResolveValues(schema.additionalProperties, propValue, parent, k, options);
           if (!resolved.ok) {
             for (const error of resolved.errors) {
               errors.push({
@@ -918,7 +916,7 @@ class SchemaResolver {
             newResult[k] = resolved.value;
           }
         } else {
-          newResult[k] = v;
+          newResult[k] = propValue;
         }
       }
     }
@@ -943,10 +941,10 @@ class SchemaResolver {
     }
 
     const { dependentSchemas, ...rest } = schema;
+    const { getValue = this.options.getValue } = options;
 
-    // Create merged schema from applicable dependent schemas
     const depSchemas = Object.entries(dependentSchemas)
-      .filter(([prop]) => value[prop] !== undefined)
+      .filter(([prop]) => getValue(value, prop) !== undefined)
       .map(([, schema]) => schema);
 
     if (depSchemas.length === 0) {
@@ -955,11 +953,9 @@ class SchemaResolver {
 
     const mergedSchema = depSchemas.reduce((acc, schema) => mergeSchemas(acc, schema), rest);
 
-    // Resolve against merged schema
     return this.internalResolveValues(mergedSchema, result, parent, key, options);
   }
 
-  // eslint-disable-next-line complexity
   private async resolveValue(
     schema: JSONSchema,
     value: any,
@@ -970,10 +966,6 @@ class SchemaResolver {
     const errors: ValidationError[] = [];
     const required = parent?.required || [];
     const opts = { ...this.options, ...options };
-
-    // if (schema.not) {
-    //   return this.resolveNot(schema, value, parent, key, options);
-    // }
 
     if (schema.allOf && schema.allOf.length === 1) {
       const { allOf, ...rest } = schema;
@@ -1026,8 +1018,9 @@ class SchemaResolver {
     }
 
     if (schema.required?.length > 0 && !opts.skipValidation) {
+      const { getValue = this.options.getValue } = options;
       const missingProps = schema.required.filter(prop => {
-        return value[prop] === undefined && (schema.properties?.[prop]?.default === undefined);
+        return getValue(value, prop) === undefined && (schema.properties?.[prop]?.default === undefined);
       });
 
       if (missingProps.length > 0) {
@@ -1044,7 +1037,6 @@ class SchemaResolver {
     return this.success(value, parent, key);
   }
 
-  // eslint-disable-next-line complexity
   private async internalResolveValues(
     schema: JSONSchema,
     value: any,
@@ -1066,6 +1058,7 @@ class SchemaResolver {
       if (!conditionalResult.ok) {
         return conditionalResult;
       }
+
       result = conditionalResult.value;
     }
 
@@ -1074,6 +1067,7 @@ class SchemaResolver {
       if (!compositionResult.ok) {
         return compositionResult;
       }
+
       result = compositionResult.value;
     }
 

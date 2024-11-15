@@ -1211,6 +1211,67 @@ describe('resolve', () => {
         assert.ok(numberResult.ok);
         assert.strictEqual(numberResult.value.value, 42);
       });
+
+      it('should apply defaults when parent object is missing', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          properties: {
+            user: {
+              type: 'object',
+              properties: {
+                settings: {
+                  type: 'object',
+                  properties: {
+                    theme: { type: 'string', default: 'dark' }
+                  }
+                }
+              }
+            }
+          }
+        };
+
+        // Test when parent object doesn't exist at all
+        const result1 = await resolveValues(schema, {});
+        assert.ok(result1.ok);
+        // This currently returns undefined, but should return 'dark'
+        assert.strictEqual(result1.value?.user?.settings?.theme, 'dark');
+
+        // Test when partial parent path exists
+        const result2 = await resolveValues(schema, { user: {} });
+        assert.ok(result2.ok);
+        // This also currently returns undefined, but should return 'dark'
+        assert.strictEqual(result2.value?.user?.settings?.theme, 'dark');
+      });
+
+      it('should handle multiple nested levels of defaults', async () => {
+        const schema: JSONSchema = {
+          type: 'object',
+          properties: {
+            user: {
+              type: 'object',
+              properties: {
+                settings: {
+                  type: 'object',
+                  default: {
+                    theme: 'dark',
+                    notifications: true
+                  },
+                  properties: {
+                    theme: { type: 'string', default: 'dark' },
+                    notifications: { type: 'boolean', default: true }
+                  }
+                }
+              }
+            }
+          }
+        };
+
+        const result = await resolveValues(schema, {});
+        assert.ok(result.ok);
+        // These currently return undefined
+        assert.strictEqual(result.value?.user?.settings?.theme, 'dark');
+        assert.strictEqual(result.value?.user?.settings?.notifications, true);
+      });
     });
 
     describe('nested properties', () => {
@@ -1490,9 +1551,7 @@ describe('resolve', () => {
           a: { type: 'string' },
           b: { type: 'string' }
         },
-        allOf: [
-          { not: { required: ['a', 'b'] } }
-        ]
+        allOf: [{ not: { required: ['a', 'b'] } }]
       };
 
       const result1 = await resolveValues(schema, { a: 'foo' });
@@ -1517,10 +1576,7 @@ describe('resolve', () => {
           a: { type: 'string' },
           b: { type: 'string' }
         },
-        allOf: [
-          { not: { required: ['b'] } },
-          { not: { required: ['a'] } }
-        ]
+        allOf: [{ not: { required: ['b'] } }, { not: { required: ['a'] } }]
       };
 
       const result1 = await resolveValues(schema, { a: 'test' });
@@ -1884,6 +1940,121 @@ describe('resolve', () => {
       });
       assert.ok(!invalidAdult.ok);
       assert.strictEqual(invalidAdult.errors[0].message, 'Value must be >= 18');
+    });
+  });
+
+  describe('array items condition evaluation', () => {
+    it('should evaluate nested array items with conditions', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        if: {
+          items: {
+            type: 'object',
+            properties: {
+              status: { const: 'active' }
+            }
+          }
+        },
+        then: {
+          items: {
+            required: ['id']
+          }
+        }
+      };
+
+      // All items are active, should require id
+      const valid = await resolveValues(schema, [
+        { status: 'active', id: '1' },
+        { status: 'active', id: '2' }
+      ]);
+      assert.ok(valid.ok);
+
+      // Missing id when all items are active
+      const invalid = await resolveValues(schema, [{ status: 'active', id: '1' }, { status: 'active' }]);
+      assert.ok(!invalid.ok);
+      assert.strictEqual(invalid.errors[0].message, 'Missing required property: id');
+    });
+
+    it('should evaluate array items with nested conditional logic', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          if: {
+            properties: {
+              type: { const: 'user' }
+            }
+          },
+          then: {
+            required: ['name', 'email']
+          }
+        }
+      };
+
+      // Valid: non-user items don't need name/email
+      const validMixed = await resolveValues(schema, [
+        { type: 'user', name: 'John', email: 'john@test.com' },
+        { type: 'system' }
+      ]);
+      assert.ok(validMixed.ok);
+
+      // Invalid: user type missing required fields
+      const invalidUser = await resolveValues(schema, [
+        { type: 'user', name: 'John' }, // missing email
+        { type: 'system' }
+      ]);
+      assert.ok(!invalidUser.ok);
+      assert.strictEqual(invalidUser.errors[0].message, 'Missing required property: email');
+    });
+
+    it.skip('should evaluate conditions on array items with multiple validation rules', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          if: {
+            properties: {
+              role: { const: 'admin' }
+            }
+          },
+          then: {
+            properties: {
+              accessLevel: {
+                type: 'number',
+                minimum: 5
+              }
+            },
+            required: ['accessLevel']
+          },
+          else: {
+            properties: {
+              accessLevel: {
+                type: 'number',
+                maximum: 4
+              }
+            }
+          }
+        }
+      };
+
+      // Valid admin with high access level
+      const validAdmin = await resolveValues(schema, [{ role: 'admin', accessLevel: 7 }]);
+      assert.ok(validAdmin.ok);
+
+      // Valid user with low access level
+      const validUser = await resolveValues(schema, [{ role: 'user', accessLevel: 2 }]);
+      assert.ok(validUser.ok);
+
+      // Invalid: admin with low access level
+      const invalidAdmin = await resolveValues(schema, [{ role: 'admin', accessLevel: 3 }]);
+      console.log(invalidAdmin);
+      assert.ok(!invalidAdmin.ok);
+      assert.strictEqual(invalidAdmin.errors[0].message, 'Value must be >= 5');
+
+      // Invalid: user with high access level
+      const invalidUser = await resolveValues(schema, [{ role: 'user', accessLevel: 6 }]);
+      console.log(invalidUser);
+      assert.ok(!invalidUser.ok);
+      assert.strictEqual(invalidUser.errors[0].message, 'Value must be <= 4');
     });
   });
 });
