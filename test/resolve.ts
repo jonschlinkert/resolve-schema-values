@@ -1205,9 +1205,7 @@ describe('resolve', () => {
         assert.ok(stringResult.ok);
         assert.strictEqual(stringResult.value.value, 'test');
 
-        const numberResult = await resolveValues(schema, {
-          value: 42
-        });
+        const numberResult = await resolveValues(schema, { value: 42 });
         assert.ok(numberResult.ok);
         assert.strictEqual(numberResult.value.value, 42);
       });
@@ -1230,16 +1228,12 @@ describe('resolve', () => {
           }
         };
 
-        // Test when parent object doesn't exist at all
         const result1 = await resolveValues(schema, {});
         assert.ok(result1.ok);
-        // This currently returns undefined, but should return 'dark'
         assert.strictEqual(result1.value?.user?.settings?.theme, 'dark');
 
-        // Test when partial parent path exists
         const result2 = await resolveValues(schema, { user: {} });
         assert.ok(result2.ok);
-        // This also currently returns undefined, but should return 'dark'
         assert.strictEqual(result2.value?.user?.settings?.theme, 'dark');
       });
 
@@ -1268,7 +1262,6 @@ describe('resolve', () => {
 
         const result = await resolveValues(schema, {});
         assert.ok(result.ok);
-        // These currently return undefined
         assert.strictEqual(result.value?.user?.settings?.theme, 'dark');
         assert.strictEqual(result.value?.user?.settings?.notifications, true);
       });
@@ -1320,9 +1313,11 @@ describe('resolve', () => {
         const result = await resolveValues(schema, {
           nested: {}
         });
+        console.log(result.errors);
         assert.ok(!result.ok);
         assert.strictEqual(result.errors.length, 1);
         assert.strictEqual(result.errors[0].message, 'Missing required property: value');
+        assert.strictEqual(result.errors[0].path[0], 'nested');
       });
     });
 
@@ -1358,6 +1353,7 @@ describe('resolve', () => {
 
         assert.ok(!numberResult.ok);
         assert.strictEqual(numberResult.errors.length, 1);
+        assert.strictEqual(numberResult.errors[0].path[0], 'value');
 
         const booleanResult = await resolveValues(schema, {
           value: true
@@ -1667,7 +1663,6 @@ describe('resolve', () => {
       assert.ok(validNormal.ok);
 
       const invalidMissingValue = await resolveValues(schema, { type: 'special' });
-
       assert.ok(!invalidMissingValue.ok);
       assert.strictEqual(invalidMissingValue.errors[0].message, 'Missing required property: value');
     });
@@ -1892,6 +1887,7 @@ describe('resolve', () => {
       const invalidResult = await resolveValues(schema, { 'invalid-key': 1 });
       assert.ok(!invalidResult.ok);
       assert.ok(invalidResult.errors[0].message.includes('must match pattern'));
+      assert.equal(invalidResult.errors[0].path[0], 'propertyNames');
     });
   });
 
