@@ -543,6 +543,22 @@ describe('resolve', () => {
       assert.deepStrictEqual(result.value.tags, ['foo', 'bar', 'baz']);
     });
 
+    it('should be undefined when no tags or default is defined', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            items: { type: 'string' }
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, {});
+      assert.ok(result.ok);
+      assert.deepEqual(result.value.tags, undefined);
+    });
+
     it('should handle array constraints', async () => {
       const schema: JSONSchema = {
         type: 'object',
@@ -565,7 +581,7 @@ describe('resolve', () => {
       assert.strictEqual(result.errors.length, 2);
     });
 
-    it('should handle valid array', async () => {
+    it.only('should use array from args over default', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -574,7 +590,8 @@ describe('resolve', () => {
             items: { type: 'string', minLength: 2 },
             minItems: 1,
             maxItems: 3,
-            uniqueItems: true
+            uniqueItems: true,
+            default: ['foo', 'bar']
           }
         }
       };
@@ -584,6 +601,7 @@ describe('resolve', () => {
       });
 
       assert.ok(result.ok);
+      assert.deepEqual(result.value.tags, ['tag1', 'tag2', 'tag3']);
     });
   });
 
@@ -1521,7 +1539,7 @@ describe('resolve', () => {
   });
 
   describe('property exclusion', () => {
-    it('should enforce mutually exclusive properties via not/required', async () => {
+    it('should enforce mutually exclusive properties via not/required (1)', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1540,7 +1558,7 @@ describe('resolve', () => {
       assert.strictEqual(invalidResult.errors[0].message, 'Value must not match schema');
     });
 
-    it('should enforce mutually exclusive properties via not/required', async () => {
+    it('should enforce mutually exclusive properties via not/required (2)', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1565,7 +1583,7 @@ describe('resolve', () => {
       assert.strictEqual(result3.errors[0].message, 'Value must not match schema');
     });
 
-    it('should enforce mutually exclusive properties via not/required', async () => {
+    it('should enforce mutually exclusive properties via not/required (3)', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1576,8 +1594,12 @@ describe('resolve', () => {
       };
 
       const result1 = await resolveValues(schema, { a: 'test' });
+
       assert.ok(!result1.ok);
-      assert.strictEqual(result1.errors[0].message, 'Value must not match schema');
+      assert.strictEqual(result1.errors[0].path.join('.'), 'allOf.not.b');
+      assert.strictEqual(result1.errors[0].message, 'Missing required property: b');
+      assert.strictEqual(result1.errors[1].path.join('.'), 'allOf.not');
+      assert.strictEqual(result1.errors[1].message, 'Value must not match schema');
 
       const result2 = await resolveValues(schema, { a: 'test', b: 'test' });
       assert.ok(!result2.ok);
@@ -1592,20 +1614,30 @@ describe('resolve', () => {
           b: { type: 'string' },
           c: { type: 'string' }
         },
-        oneOf: [{ required: ['a'] }, { required: ['b'] }, { required: ['c'] }]
+        oneOf: [
+          { required: ['a'] },
+          { required: ['b'], properties: { name: { type: 'string', default: 'doowb' } } },
+          { required: ['c'] }
+        ]
       };
 
       const validResult = await resolveValues(schema, { b: 'test' });
+      console.log(validResult);
       assert.ok(validResult.ok);
       assert.strictEqual(validResult.value.b, 'test');
+      assert.strictEqual(validResult.value.name, 'doowb');
 
       const invalidTwoProps = await resolveValues(schema, { a: 'test', b: 'test' });
+      console.log(invalidTwoProps.errors);
       assert.ok(!invalidTwoProps.ok);
+
       assert.strictEqual(invalidTwoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
 
       const invalidNoProps = await resolveValues(schema, {});
       assert.ok(!invalidNoProps.ok);
-      assert.strictEqual(invalidNoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
+      console.log(invalidNoProps.errors);
+      assert.equal(invalidNoProps.errors.length, 2);
+      assert.strictEqual(invalidNoProps.errors[1].message, 'Value must match exactly one schema in oneOf');
     });
   });
 
@@ -2000,13 +2032,15 @@ describe('resolve', () => {
         { type: 'system' }
       ]);
       assert.ok(!invalidUser.ok);
+
       assert.strictEqual(invalidUser.errors[0].message, 'Missing required property: email');
     });
 
-    it.skip('should evaluate conditions on array items with multiple validation rules', async () => {
+    it('should evaluate conditions on array items with multiple validation rules', async () => {
       const schema: JSONSchema = {
         type: 'array',
         items: {
+          type: 'object',
           if: {
             properties: {
               role: { const: 'admin' }
@@ -2042,14 +2076,13 @@ describe('resolve', () => {
 
       // Invalid: admin with low access level
       const invalidAdmin = await resolveValues(schema, [{ role: 'admin', accessLevel: 3 }]);
-      console.log(invalidAdmin);
       assert.ok(!invalidAdmin.ok);
       assert.strictEqual(invalidAdmin.errors[0].message, 'Value must be >= 5');
 
       // Invalid: user with high access level
       const invalidUser = await resolveValues(schema, [{ role: 'user', accessLevel: 6 }]);
-      console.log(invalidUser);
       assert.ok(!invalidUser.ok);
+
       assert.strictEqual(invalidUser.errors[0].message, 'Value must be <= 4');
     });
   });

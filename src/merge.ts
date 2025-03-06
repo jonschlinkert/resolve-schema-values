@@ -98,17 +98,17 @@ export const mergeSchemas = (schema1: JSONSchema = {}, schema2: JSONSchema = {},
     }
   }
 
-  // if (schema1.enum || schema2.enum || schema1.const || schema2.const) {
-  //   if (isSameConst(schema1.const, schema2.enum) || isSameConst(schema2.const, schema1.enum)) {
-  //     const value = schema1.const || schema2.const || schema1.enum || schema2.enum;
-  //     result.const = [].concat(value)[0];
-  //     delete result.enum;
-  //   } else {
-  //     result.enum = mergeArrays(schema1.enum, schema2.enum);
-  //   }
-  // } else if (schema1.const !== undefined || schema2.const !== undefined) {
-  //   result.const = schema2.const ?? schema1.const;
-  // }
+  if (schema1.enum || schema2.enum || schema1.const || schema2.const) {
+    if (isSameConst(schema1.const, schema2.enum) || isSameConst(schema2.const, schema1.enum)) {
+      const value = schema1.const || schema2.const || schema1.enum || schema2.enum;
+      result.const = [].concat(value)[0];
+      delete result.enum;
+    } else {
+      result.enum = mergeArrays(schema1.enum, schema2.enum);
+    }
+  } else if (schema1.const !== undefined || schema2.const !== undefined) {
+    result.const = schema2.const ?? schema1.const;
+  }
 
   // Merge number validation
   result.minimum = schema2.minimum ?? schema1.minimum;

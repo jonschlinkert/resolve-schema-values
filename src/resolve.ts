@@ -1,5 +1,7 @@
 /* eslint-disable complexity */
 import type { JSONSchema, ResolveOptions } from '~/types';
+import cloneDeep from 'clone-deep';
+import { resolveRef } from 'expand-json-schema';
 import { mergeSchemas } from '~/merge';
 import { deepAssign, filterProps, getSegments, getValueType, isComposition, isObject } from '~/utils';
 
@@ -28,6 +30,9 @@ class SchemaResolver {
   private readonly options: ResolveOptions & { getValue?: (obj: any, key: string) => any };
   private negationDepth: number;
   private stack: string[];
+  private errors: ValidationError[] = [];
+  private root: JSONSchema;
+  private resolvedType: boolean = false;
 
   constructor(options: ResolveOptions = {}) {
     this.options = {
@@ -36,6 +41,7 @@ class SchemaResolver {
     };
 
     this.negationDepth = 0;
+    this.errors = [];
     this.stack = [];
   }
 
@@ -49,14 +55,36 @@ class SchemaResolver {
   }
 
   private failure(errors: ValidationError[], parent, key?: string): Failure {
-    const path = this.stack.length > 0 ? [...this.stack] : undefined;
+    const path = this.stack.length > 0 ? [...this.stack] : [];
 
-    return {
+    const errorsWithPath = errors.map(error => {
+      return {
+        ...error,
+        // ...!error.id && { id: randomUUID() },
+        path: path.concat(error.path || [])
+      };
+    });
+
+    const result = {
       ok: false,
-      errors: errors.map(error => ({ ...error, ...path && { path } })),
+      errors: errorsWithPath,
       parent,
       key
     };
+
+    if (!this.isInside(['if', 'contains', 'oneOf'])) {
+      this.errors.push(...errorsWithPath);
+    }
+
+    if (this.isInside(['oneOf']) && path?.join('.') === 'oneOf') {
+      this.errors.push(...errorsWithPath);
+    }
+
+    return result;
+  }
+
+  private isInside(keys: string[]): boolean {
+    return keys.some(key => this.stack.includes(key));
   }
 
   private isInsideNegation(): boolean {
@@ -109,7 +137,7 @@ class SchemaResolver {
       this.stack.push('items');
       for (let i = 0; i < value.length; i++) {
         const itemValue = getValue(value, String(i));
-        const resolved = await this.internalResolveValues(schema.items, itemValue, parent, key, options);
+        const resolved = await this.internalResolveValues(schema.items, itemValue, schema, key, options);
 
         if (!resolved.ok) {
           this.stack.pop();
@@ -353,7 +381,6 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<Result<any>> {
-    this.isInsideConditional = true;
     const { if: ifSchema, then: thenSchema, else: elseSchema = {}, ...partialSchema } = schema;
 
     this.stack.push('if');
@@ -377,8 +404,6 @@ class SchemaResolver {
     const errors: ValidationError[] = [];
     let values = {};
 
-    this.stack.push('allOf');
-
     for (const subSchema of allOf) {
       let merged;
 
@@ -396,15 +421,12 @@ class SchemaResolver {
       }
 
       const resolved = await this.internalResolveValues(merged, value, parent, 'allOf', options);
-
       if (!resolved.ok) {
         errors.push(...resolved.errors);
       } else {
         values = deepAssign(values, resolved.value);
       }
     }
-
-    this.stack.pop();
 
     if (errors.length > 0) {
       return this.failure(errors, parent, key);
@@ -429,10 +451,7 @@ class SchemaResolver {
 
     for (const subSchema of anyOf) {
       const mergedSchema = mergeSchemas(subSchema, rest);
-
-      this.stack.push('anyOf');
       const resolved = await this.internalResolveValues(mergedSchema, value, parent, 'anyOf', options);
-      this.stack.pop();
 
       if (resolved.ok) {
         return this.success(value, parent, key);
@@ -455,35 +474,46 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<Result<any>> {
-    let validCount = 0;
-    let validResult = null;
-    const errors: ValidationError[] = [];
     const { oneOf, ...rest } = schema;
+    const candidates = [];
 
     for (const subSchema of oneOf) {
       const mergedSchema = mergeSchemas(subSchema, rest);
-
-      this.stack.push('oneOf');
-      const resolved = await this.internalResolveValues(mergedSchema, value, parent, 'oneOf', options);
-      this.stack.pop();
-
-      if (resolved.ok) {
-        validCount++;
-        validResult = value;
-      } else {
-        errors.push(...resolved.errors);
-      }
+      const resolved = await this.internalResolveValues(mergedSchema, value, parent, key, options);
+      candidates.push({ resolved, schema: subSchema });
     }
 
-    if (validCount !== 1) {
-      if (schema.default !== undefined) {
-        return this.success(schema.default, parent, key);
+    const matches = candidates.filter(c => c.resolved.ok);
+
+    if (matches.length === 1) {
+      return matches[0].resolved;
+    }
+
+    if (matches.length === 0) {
+      // First check which schema structurally matches our value
+      const valueProps = Object.keys(value || {});
+      const matchingCandidate = candidates.find(c =>
+        // Find the schema that declares the properties our value has
+        valueProps.some(prop => prop in (c.schema.properties || {}))
+      );
+
+      // console.log('matches', matchingCandidate);
+
+      // If we found a matching schema, use its errors
+      if (matchingCandidate) {
+        return matchingCandidate.resolved;
       }
 
+      // If no structural match found, return generic oneOf error
       return this.failure([{ message: 'Value must match exactly one schema in oneOf' }], parent, key);
     }
 
-    return this.success(validResult, parent, key);
+    // Multiple matches - oneOf violation
+    if (schema.default !== undefined) {
+      return this.success(schema.default, parent, key);
+    }
+
+    return this.failure([{ message: 'Value must match exactly one schema in oneOf' }], parent, key);
   }
 
   private async resolveNot(
@@ -497,16 +527,17 @@ class SchemaResolver {
 
     try {
       const { not: notSchema, ...partialSchema } = schema;
-
       this.stack.push('not');
       const notResult = await this.internalResolveValues(notSchema, value, parent, 'not', options);
-      this.stack.pop();
 
       if (notResult.ok) {
-        return this.failure([{ message: 'Value must not match schema' }], parent, key);
+        const failure = this.failure([{ message: 'Value must not match schema' }], parent, key);
+        this.stack.pop();
+        return failure;
       }
 
-      return this.internalResolveValues(partialSchema, value, parent, 'not', options);
+      this.stack.pop();
+      return this.internalResolveValues(partialSchema, value, parent, key, options);
     } finally {
       this.negationDepth--;
     }
@@ -516,9 +547,9 @@ class SchemaResolver {
     const { getValue = this.options.getValue } = {};
 
     if (schema.allOf) {
-      const notSchemas = schema.allOf.filter(s => s.not?.required);
-      if (notSchemas.length > 0) {
-        return notSchemas.every(s => {
+      const notRequiredSchemas = schema.allOf.filter(s => s.not?.required);
+      if (notRequiredSchemas.length > 0) {
+        return notRequiredSchemas.every(s => {
           return !s.not.required.every(prop => getValue(value, prop) !== undefined);
         });
       }
@@ -538,20 +569,32 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<Result<any>> {
-    if (schema.not) {
-      return this.resolveNot(schema, value, parent, key, options);
-    }
-
     if (schema.allOf) {
-      return this.resolveAllOf(schema, value, parent, key, options);
+      this.stack.push('allOf');
+      const resolved = await this.resolveAllOf(schema, value, parent, key, options);
+      this.stack.pop();
+      return resolved;
     }
 
     if (schema.anyOf) {
-      return this.resolveAnyOf(schema, value, parent, key, options);
+      this.stack.push('anyOf');
+      const resolved = await this.resolveAnyOf(schema, value, parent, key, options);
+      this.stack.pop();
+      return resolved;
     }
 
     if (schema.oneOf) {
-      return this.resolveOneOf(schema, value, parent, key, options);
+      this.stack.push('oneOf');
+      const resolved = await this.resolveOneOf(schema, value, parent, key, options);
+      this.stack.pop();
+      return resolved;
+    }
+
+    if (schema.not) {
+      this.stack.push('not');
+      const resolved = await this.resolveNot(schema, value, parent, key, options);
+      this.stack.pop();
+      return resolved;
     }
 
     return this.success(value, parent, key);
@@ -571,7 +614,7 @@ class SchemaResolver {
     if (!Array.isArray(value)) {
       if (value === undefined || value === null) {
         if (schema.default !== undefined) {
-          return this.success(schema.default, parent, key);
+          return this.success([].concat(schema.default), parent, key);
         }
 
         if (required.includes(key) && !this.isInsideNegation()) {
@@ -579,7 +622,7 @@ class SchemaResolver {
           return this.failure(errors, parent, key);
         }
 
-        return this.success([], parent, key);
+        return this.success(undefined, parent, key);
       }
 
       errors.push({ message: 'Value must be an array' });
@@ -650,7 +693,7 @@ class SchemaResolver {
         const itemValue = getValue(values, String(i));
 
         if (i < schema.items.length) {
-          const resolved = await this.internalResolveValues(schema.items[i], itemValue, parent, String(i), options);
+          const resolved = await this.internalResolveValues(schema.items[i], itemValue, schema, String(i), options);
 
           if (!resolved.ok) {
             errors.push(...resolved.errors);
@@ -661,7 +704,7 @@ class SchemaResolver {
           errors.push({ message: 'Additional items not allowed' });
           break;
         } else if (schema.additionalItems) {
-          const resolved = await this.internalResolveValues(schema.additionalItems, itemValue, parent, String(i), options);
+          const resolved = await this.internalResolveValues(schema.additionalItems, itemValue, schema, String(i), options);
 
           if (!resolved.ok) {
             errors.push(...resolved.errors);
@@ -683,7 +726,7 @@ class SchemaResolver {
 
       if (schema.prefixItems && i < schema.prefixItems.length) {
         this.stack.push('prefixItems');
-        const resolved = await this.internalResolveValues(schema.prefixItems[i], itemValue, parent, String(i), options);
+        const resolved = await this.internalResolveValues(schema.prefixItems[i], itemValue, schema, String(i), options);
         this.stack.pop();
 
         if (!resolved.ok) {
@@ -693,14 +736,26 @@ class SchemaResolver {
         }
       } else if (isObject(schema.items)) {
         this.stack.push('items');
-        const resolved = await this.internalResolveValues(schema.items, itemValue, parent, String(i), options);
-        this.stack.pop();
 
-        if (!resolved.ok) {
-          errors.push(...resolved.errors);
+        // Check if we have conditional logic in the items schema
+        if (schema.items.if) {
+          const resolved = await this.resolveConditional(schema.items, itemValue, schema, String(i), options);
+          if (!resolved.ok) {
+            errors.push(...resolved.errors);
+          } else {
+            result.push(resolved.value);
+          }
         } else {
-          result.push(resolved.value);
+          // If no conditionals, process normally
+          const resolved = await this.internalResolveValues(schema.items, itemValue, schema, String(i), options);
+          if (!resolved.ok) {
+            errors.push(...resolved.errors);
+          } else {
+            result.push(resolved.value);
+          }
         }
+
+        this.stack.pop();
       } else {
         result.push(itemValue);
       }
@@ -755,9 +810,11 @@ class SchemaResolver {
     }
 
     if (this.isInsideNegation()) {
+      this.stack.push('required');
       if (!this.resolveNotRequired(schema, value)) {
         errors.push({ message: 'Object does not satisfy required property constraints' });
       }
+      this.stack.pop();
     } else if (schema.required) {
       for (const propKey of schema.required) {
         const prop = schema.properties?.[propKey];
@@ -769,7 +826,7 @@ class SchemaResolver {
           if (defaultValue !== undefined) {
             value[propKey] = defaultValue;
           } else {
-            errors.push({ message: `Missing required property: ${propKey}` });
+            errors.push({ message: `Missing required property: ${propKey}`, path: [propKey] });
           }
         }
       }
@@ -802,6 +859,20 @@ class SchemaResolver {
       }
       result = { ...result, ...resolvedProperties.value };
     }
+
+    if (schema.patternProperties) {
+      const patternResult = await this.resolvePatternProperties(schema, value, result, parent, key, options);
+      if (!patternResult.ok) {
+        return patternResult;
+      }
+      result = patternResult.value;
+    }
+
+    const additionalResult = await this.resolveAdditionalProperties(schema, value, result, parent, key, options);
+    if (!additionalResult.ok) {
+      return additionalResult;
+    }
+    result = additionalResult.value;
 
     if (schema.dependentSchemas) {
       const dependentResult = await this.resolveDependentSchemas(schema, value, result, parent, key, options);
@@ -907,7 +978,25 @@ class SchemaResolver {
     key?: string,
     options: ResolveOptions = {}
   ): Promise<Result<Record<string, any>>> {
-    if (schema.additionalProperties === false) {
+    const addlProps = schema.additionalProperties;
+
+    if (addlProps?.$ref) {
+      const refSchema = addlProps.$ref === '#'
+        ? this.root
+        : resolveRef(addlProps.$ref, this.root);
+
+      if (!refSchema) {
+        return this.failure([{ message: `Schema not found: ${addlProps.$ref}` }], parent, key);
+      }
+
+      this.stack.push('additionalProperties');
+      const merged = mergeSchemas(refSchema, addlProps);
+      const resolved = await this.internalResolveValues(merged, result, parent, key, options);
+      this.stack.pop();
+      return resolved;
+    }
+
+    if (addlProps === false) {
       return this.success(result, parent, key);
     }
 
@@ -918,8 +1007,8 @@ class SchemaResolver {
     for (const [k, v] of Object.entries(value)) {
       if (!newResult.hasOwnProperty(k)) {
         const propValue = getValue(value, k);
-        if (typeof schema.additionalProperties === 'object') {
-          const resolved = await this.internalResolveValues(schema.additionalProperties, propValue, parent, k, options);
+        if (typeof addlProps === 'object') {
+          const resolved = await this.internalResolveValues(addlProps, propValue, parent, k, options);
 
           if (!resolved.ok) {
             errors.push(...resolved.errors);
@@ -996,6 +1085,10 @@ class SchemaResolver {
       return this.internalResolveValues(merged, value, parent, key, options);
     }
 
+    if (schema.not && !opts.skipValidation) {
+      return this.resolveNot(schema, value, parent, key, options);
+    }
+
     if (schema.oneOf || schema.anyOf || schema.allOf) {
       return this.resolveComposition(schema, value, parent, key, options);
     }
@@ -1008,15 +1101,12 @@ class SchemaResolver {
       }
 
       if (required.includes(key) && !this.isInsideNegation()) {
-        return this.failure([{ message: `Missing required value: ${key}` }], parent, key);
+        const result = this.failure([{ message: `Missing required value: ${key}` }], parent, key);
+        this.stack.pop();
+        return result;
       }
 
       return this.success(value, parent, key);
-    }
-
-    if (schema.not && !opts.skipValidation) {
-      const notResult = await this.resolveNot(schema, value, parent, key, options);
-      return notResult;
     }
 
     if (schema.const !== undefined && value !== schema.const) {
@@ -1034,16 +1124,18 @@ class SchemaResolver {
       });
 
       if (missingProps.length > 0) {
-        return this.failure(
-          missingProps.map(prop => ({ message: `Missing required property: ${prop}` })),
-          parent,
-          key
-        );
+        missingProps.forEach(prop => this.stack.push(prop));
+        const error = this.failure(missingProps.map(prop => ({ message: `Missing required property: ${prop}` })), parent, key);
+        missingProps.forEach(() => this.stack.pop());
+        return error;
       }
     }
 
     if (errors.length > 0) {
-      return this.failure(errors, parent, key);
+      if (key) this.stack.push(key);
+      const result = this.failure(errors, parent, key);
+      if (key) this.stack.pop();
+      return result;
     }
 
     return this.success(value, parent, key);
@@ -1058,8 +1150,30 @@ class SchemaResolver {
   ): Promise<Result<any>> {
     let result = value;
 
+    const resolveType = () => {
+      this.resolvedType = true;
+      switch (schema.type) {
+        case 'null': return this.resolveNull(schema, result, parent, key, options);
+        case 'array': return this.resolveArray(schema, result, parent, key, options);
+        case 'boolean': return this.resolveBoolean(schema, result, parent, key, options);
+        case 'integer': return this.resolveInteger(schema, result, parent, key, options);
+        case 'number': return this.resolveNumber(schema, result, parent, key, options);
+        case 'object': return this.resolveObject(schema, result, parent, key, options);
+        case 'string': return this.resolveString(schema, result, parent, key, options);
+        default: {
+          return this.failure([{ message: `Unsupported type: ${schema.type}` }], parent, key);
+        }
+      }
+    };
+
     const valueResult = await this.resolveValue(schema, result, parent, key, options);
     if (!valueResult.ok) {
+      if (!this.resolvedType && !this.isInside(['not'])) {
+        // If we haven't resolved the type yet, try to resolve it now
+        // so we can get any error messages pushed onto the error stack
+        await resolveType();
+      }
+
       return valueResult;
     }
 
@@ -1099,22 +1213,32 @@ class SchemaResolver {
       return this.internalResolveValues(typeSchema, result, parent, key, options);
     }
 
-    switch (schema.type) {
-      case 'null': return this.resolveNull(schema, result, parent, key, options);
-      case 'array': return this.resolveArray(schema, result, parent, key, options);
-      case 'boolean': return this.resolveBoolean(schema, result, parent, key, options);
-      case 'integer': return this.resolveInteger(schema, result, parent, key, options);
-      case 'number': return this.resolveNumber(schema, result, parent, key, options);
-      case 'object': return this.resolveObject(schema, result, parent, key, options);
-      case 'string': return this.resolveString(schema, result, parent, key, options);
-      default: {
-        return this.failure([{ message: `Unsupported type: ${schema.type}` }], parent, key);
-      }
-    }
+    return resolveType();
   }
 
   async resolveValues(schema: JSONSchema, values: any): Promise<Result<any>> {
-    const { ok, errors, value } = await this.internalResolveValues(schema, values);
+    this.root ||= cloneDeep(schema);
+
+    const { ok, value } = await this.internalResolveValues(schema, values);
+    const seen = new Set();
+    let errors = [];
+
+    for (const error of this.errors) {
+      if (!seen.has(error.message)) {
+        seen.add(error.message);
+        errors.push(error);
+      }
+    }
+
+    const isOneOfError = error => error.path.join('') === 'oneOf';
+    const isRequiredError = error => error.message.startsWith('Missing required');
+    const isDisposableError = error => isOneOfError(error) || isRequiredError(error);
+    const isInsideOneOf = error => error.path?.includes('oneOf');
+
+    if (errors.length > 1 && errors.some(e => isDisposableError(e)) && errors.some(e => (e.path?.length > 1 && !isInsideOneOf(e)) || !isDisposableError(e))) {
+      errors = errors.filter(e => (e.path?.length > 1 && !isInsideOneOf(e)) || !isDisposableError(e));
+    }
+
     return ok ? { ok, value } : { ok, errors };
   }
 }

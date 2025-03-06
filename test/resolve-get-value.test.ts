@@ -1,5 +1,5 @@
 import type { JSONSchema } from '~/types';
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import getValue from 'get-value';
 import { resolveValues } from '~/resolve';
 

@@ -13,7 +13,7 @@
   "scripts": {
     "prepublish": "npx tsup",
     "eslint": "npx eslint --ext .ts .",
-    "test": "ts-mocha -r esbuild-register 'test/**/*.ts'",
+    "test": "ts-mocha -r esbuild-register 'test/**/*.test.ts'",
     "tsup": "npx tsup"
   },
   "module": "dist/index.mjs",
@@ -71,5 +71,9 @@
     "lint": {
       "reflinks": true
     }
+  },
+  "dependencies": {
+    "clone-deep": "^4.0.1",
+    "expand-json-schema": "^1.0.1"
   }
 }
