@@ -1,7 +1,7 @@
 {
   "name": "resolve-schema-values",
   "description": "Resolve values based on a JSON schema. Supports conditionals and composition. Useful for configuration, preferences, LLM chat completions, etc.",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/jonschlinkert/resolve-schema-values"
