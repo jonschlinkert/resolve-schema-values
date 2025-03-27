@@ -581,7 +581,7 @@ describe('resolve', () => {
       assert.strictEqual(result.errors.length, 2);
     });
 
-    it.only('should use array from args over default', async () => {
+    it('should use array from args over default', async () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1331,7 +1331,7 @@ describe('resolve', () => {
         const result = await resolveValues(schema, {
           nested: {}
         });
-        console.log(result.errors);
+
         assert.ok(!result.ok);
         assert.strictEqual(result.errors.length, 1);
         assert.strictEqual(result.errors[0].message, 'Missing required property: value');
@@ -1622,20 +1622,18 @@ describe('resolve', () => {
       };
 
       const validResult = await resolveValues(schema, { b: 'test' });
-      console.log(validResult);
+
       assert.ok(validResult.ok);
       assert.strictEqual(validResult.value.b, 'test');
       assert.strictEqual(validResult.value.name, 'doowb');
 
       const invalidTwoProps = await resolveValues(schema, { a: 'test', b: 'test' });
-      console.log(invalidTwoProps.errors);
       assert.ok(!invalidTwoProps.ok);
 
       assert.strictEqual(invalidTwoProps.errors[0].message, 'Value must match exactly one schema in oneOf');
 
       const invalidNoProps = await resolveValues(schema, {});
       assert.ok(!invalidNoProps.ok);
-      console.log(invalidNoProps.errors);
       assert.equal(invalidNoProps.errors.length, 2);
       assert.strictEqual(invalidNoProps.errors[1].message, 'Value must match exactly one schema in oneOf');
     });

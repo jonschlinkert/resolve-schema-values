@@ -498,7 +498,6 @@ class SchemaResolver {
       );
 
       // console.log('matches', matchingCandidate);
-
       // If we found a matching schema, use its errors
       if (matchingCandidate) {
         return matchingCandidate.resolved;
@@ -1109,12 +1108,20 @@ class SchemaResolver {
       return this.success(value, parent, key);
     }
 
-    if (schema.const !== undefined && value !== schema.const) {
+    if (schema.const && value !== schema.const) {
       errors.push({ message: `Value must be ${schema.const}` });
     }
 
-    if (schema.enum !== undefined && !schema.enum.includes(value)) {
-      errors.push({ message: `Value must be one of: ${schema.enum.join(', ')}` });
+    if (schema.enum && !schema.enum.some(v => v === value || v?.name === value)) {
+      const values = schema.enum.map(v => {
+        if (typeof v === 'string') {
+          return v;
+        }
+
+        return v?.name || JSON.stringify(v);
+      });
+
+      errors.push({ message: `Value must be one of: ${values.join(', ')}` });
     }
 
     if (schema.required?.length > 0 && !opts.skipValidation) {
