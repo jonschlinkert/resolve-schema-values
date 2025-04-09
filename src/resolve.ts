@@ -55,13 +55,13 @@ class SchemaResolver {
   }
 
   private failure(errors: ValidationError[], parent, key?: string): Failure {
-    const path = this.stack.length > 0 ? [...this.stack] : [];
+    const stack = this.stack.length > 0 ? [...this.stack] : [];
 
     const errorsWithPath = errors.map(error => {
       return {
         ...error,
         // ...!error.id && { id: randomUUID() },
-        path: path.concat(error.path || [])
+        path: stack.concat(error.path || [])
       };
     });
 
@@ -76,7 +76,7 @@ class SchemaResolver {
       this.errors.push(...errorsWithPath);
     }
 
-    if (this.isInside(['oneOf']) && path?.join('.') === 'oneOf') {
+    if (this.isInside(['oneOf']) && stack.join('.') === 'oneOf') {
       this.errors.push(...errorsWithPath);
     }
 
@@ -287,7 +287,7 @@ class SchemaResolver {
         return this.failure(errors, parent, key);
       }
 
-      return this.success(0, parent, key);
+      return this.success(value, parent, key);
     }
 
     if (typeof value !== 'number' && (value != null || (required.includes(key) && !this.isInsideNegation()))) {
@@ -1121,7 +1121,7 @@ class SchemaResolver {
         return v?.name || JSON.stringify(v);
       });
 
-      errors.push({ message: `Value must be one of: ${values.join(', ')}` });
+      errors.push({ message: `Value must be one of: ${values.join(', ')}`, invalidValue: value });
     }
 
     if (schema.required?.length > 0 && !opts.skipValidation) {

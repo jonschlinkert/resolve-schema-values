@@ -2,6 +2,14 @@ import type { JSONSchema } from '~/types';
 import { schemaProps } from '~/schema-props';
 import util from 'node:util';
 
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 export const inspect = v => util.inspect(v, { depth: null, colors: true, maxArrayLength: null });
 
 export const isPrimitive = (v): boolean => Object(v) !== v;
@@ -68,13 +76,6 @@ export const isValidValueType = (value: any, type: string): boolean => {
     default: return false;
   }
 };
-type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
 
 export function deepAssign<T extends JsonValue>(target: T, ...sources: T[]): T {
   // Handle null, undefined, or primitive values
