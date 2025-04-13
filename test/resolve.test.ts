@@ -854,6 +854,146 @@ describe('resolve', () => {
         { id: 2, name: 'test' }
       ]);
     });
+
+    it('should resolve array default value', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'number' },
+            name: { type: 'string', default: 'unnamed' }
+          }
+        },
+        default: [{ id: 0, name: 'default' }]
+      };
+
+      const result = await resolveValues(schema);
+      assert.ok(result.ok);
+      assert.deepStrictEqual(result.value, [
+        { id: 0, name: 'default' }
+      ]);
+    });
+
+    it('should resolve cascading array default values', async () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'number' },
+            name: { type: 'string', default: 'unnamed' }
+          }
+        },
+        default: [{ id: 0 }]
+      };
+
+      const result = await resolveValues(schema);
+      assert.ok(result.ok);
+      assert.deepStrictEqual(result.value, [
+        { id: 0, name: 'unnamed' }
+      ]);
+    });
+
+    it('should resolve nested cascading array default values', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          list: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number' },
+                name: { type: 'string', default: 'unnamed' }
+              }
+            },
+            default: [{ id: 0 }]
+          }
+        }
+      };
+
+      const result = await resolveValues(schema);
+      assert.ok(result.ok);
+      assert.deepStrictEqual(result.value, {
+        list: [
+          { id: 0, name: 'unnamed' }
+        ]
+      });
+    });
+
+    it('should resolve partial value from defaults', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          list: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number' },
+                name: { type: 'string', default: 'unnamed' }
+              }
+            },
+            default: [{ id: 0 }]
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, { list: [{ id: 1 }] });
+      assert.ok(result.ok);
+      assert.deepStrictEqual(result.value, {
+        list: [
+          { id: 1, name: 'unnamed' }
+        ]
+      });
+    });
+
+    it('should reject invalid value for array type', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          list: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number' },
+                name: { type: 'string', default: 'unnamed' }
+              }
+            },
+            default: [{ id: 0 }]
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, { list: true });
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+    });
+
+    it('should reject invalid array values', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          list: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number' },
+                name: { type: 'string', default: 'unnamed' }
+              }
+            },
+            default: [{ id: 0 }]
+          }
+        }
+      };
+
+      const result = await resolveValues(schema, { list: [{ id: true }] });
+      assert.ok(!result.ok);
+      assert.strictEqual(result.errors.length, 1);
+    });
   });
 
   describe('dependent schemas', () => {

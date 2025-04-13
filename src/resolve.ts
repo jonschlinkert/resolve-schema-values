@@ -60,7 +60,6 @@ class SchemaResolver {
     const errorsWithPath = errors.map(error => {
       return {
         ...error,
-        // ...!error.id && { id: randomUUID() },
         path: stack.concat(error.path || [])
       };
     });
@@ -136,7 +135,7 @@ class SchemaResolver {
 
       this.stack.push('items');
       for (let i = 0; i < value.length; i++) {
-        const itemValue = getValue(value, String(i));
+        const itemValue = getValue(value, String(i), schema);
         const resolved = await this.internalResolveValues(schema.items, itemValue, schema, key, options);
 
         if (!resolved.ok) {
@@ -157,7 +156,7 @@ class SchemaResolver {
       for (const [prop, condition] of Object.entries(schema.properties)) {
         this.stack.push(prop);
         const parentProp = parent?.properties?.[prop];
-        const propValue = getValue(value, prop);
+        const propValue = getValue(value, prop, condition, schema);
 
         if (propValue === undefined) {
           if (condition.default !== undefined) {
@@ -497,7 +496,6 @@ class SchemaResolver {
         valueProps.some(prop => prop in (c.schema.properties || {}))
       );
 
-      // console.log('matches', matchingCandidate);
       // If we found a matching schema, use its errors
       if (matchingCandidate) {
         return matchingCandidate.resolved;
@@ -549,13 +547,15 @@ class SchemaResolver {
       const notRequiredSchemas = schema.allOf.filter(s => s.not?.required);
       if (notRequiredSchemas.length > 0) {
         return notRequiredSchemas.every(s => {
-          return !s.not.required.every(prop => getValue(value, prop) !== undefined);
+          return !s.not.required.every(prop => {
+            return getValue(value, prop, schema) !== undefined;
+          });
         });
       }
     }
 
     if (schema.not?.required) {
-      return !schema.not.required.every(prop => getValue(value, prop) !== undefined);
+      return !schema.not.required.every(prop => getValue(value, prop, schema) !== undefined);
     }
 
     return true;
@@ -645,7 +645,7 @@ class SchemaResolver {
       let containsValid = false;
 
       for (let i = 0; i < value.length; i++) {
-        const itemValue = getValue(value, String(i));
+        const itemValue = getValue(value, String(i), schema);
         const resolved = await this.internalResolveValues(schema.contains, itemValue, parent, key, options);
 
         if (resolved.ok) {
@@ -689,7 +689,7 @@ class SchemaResolver {
       this.stack.push('items');
 
       for (let i = 0; i < values.length; i++) {
-        const itemValue = getValue(values, String(i));
+        const itemValue = getValue(values, String(i), schema);
 
         if (i < schema.items.length) {
           const resolved = await this.internalResolveValues(schema.items[i], itemValue, schema, String(i), options);
@@ -721,7 +721,7 @@ class SchemaResolver {
     }
 
     for (let i = 0; i < maxLength; i++) {
-      const itemValue = getValue(values, String(i));
+      const itemValue = getValue(values, String(i), schema);
 
       if (schema.prefixItems && i < schema.prefixItems.length) {
         this.stack.push('prefixItems');
@@ -778,36 +778,6 @@ class SchemaResolver {
     const required = parent?.required || [];
     const { getValue = this.options.getValue } = options;
 
-    if (!isObject(value)) {
-      if (value === undefined || value === null) {
-        const defaultValue = schema.default;
-
-        if (defaultValue !== undefined) {
-          return this.success(defaultValue, parent, key);
-        }
-
-        if (required.includes(key) && !this.isInsideNegation()) {
-          errors.push({ message: `Missing required object: ${key}` });
-          return this.failure(errors, parent, key);
-        }
-
-        // Instead of returning early, set value to empty object and continue
-        // This allows for default values to be set for nested properties
-        value = {};
-      } else {
-        errors.push({ message: 'Value must be an object' });
-        return this.failure(errors, parent, key);
-      }
-    }
-
-    if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) {
-      errors.push({ message: `Object must have >= ${schema.minProperties} properties` });
-    }
-
-    if (schema.maxProperties !== undefined && Object.keys(value).length > schema.maxProperties) {
-      errors.push({ message: `Object must have <= ${schema.maxProperties} properties` });
-    }
-
     if (this.isInsideNegation()) {
       this.stack.push('required');
       if (!this.resolveNotRequired(schema, value)) {
@@ -817,7 +787,7 @@ class SchemaResolver {
     } else if (schema.required) {
       for (const propKey of schema.required) {
         const prop = schema.properties?.[propKey];
-        const propValue = getValue(value, propKey);
+        const propValue = getValue(value, propKey, prop, schema);
 
         if (propValue === undefined) {
           const defaultValue = prop?.default;
@@ -867,11 +837,13 @@ class SchemaResolver {
       result = patternResult.value;
     }
 
-    const additionalResult = await this.resolveAdditionalProperties(schema, value, result, parent, key, options);
-    if (!additionalResult.ok) {
-      return additionalResult;
+    if (schema.additionalProperties === true) {
+      const additionalResult = await this.resolveAdditionalProperties(schema, value, result, parent, key, options);
+      if (!additionalResult.ok) {
+        return additionalResult;
+      }
+      result = additionalResult.value;
     }
-    result = additionalResult.value;
 
     if (schema.dependentSchemas) {
       const dependentResult = await this.resolveDependentSchemas(schema, value, result, parent, key, options);
@@ -889,6 +861,40 @@ class SchemaResolver {
       result = conditionalResult.value;
     }
 
+    if (result !== undefined) {
+      value = result;
+    }
+
+    if (!isObject(value)) {
+      if (value === undefined || value === null) {
+        const defaultValue = schema.default;
+
+        if (defaultValue !== undefined) {
+          return this.success(defaultValue, parent, key);
+        }
+
+        if (required.includes(key) && !this.isInsideNegation()) {
+          errors.push({ message: `Missing required object: ${key}` });
+          return this.failure(errors, parent, key);
+        }
+
+        // Instead of returning early, set value to empty object and continue
+        // This allows for default values to be set for nested properties
+        value = {};
+      } else {
+        errors.push({ message: 'Value must be an object' });
+        return this.failure(errors, parent, key);
+      }
+    }
+
+    if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) {
+      errors.push({ message: `Object must have >= ${schema.minProperties} properties` });
+    }
+
+    if (schema.maxProperties !== undefined && Object.keys(value).length > schema.maxProperties) {
+      errors.push({ message: `Object must have <= ${schema.maxProperties} properties` });
+    }
+
     return this.success(result, parent, key);
   }
 
@@ -904,11 +910,10 @@ class SchemaResolver {
     const { getValue = this.options.getValue } = options;
 
     for (const [propKey, propSchema] of Object.entries(properties)) {
-      const propValue = getValue(value, propKey);
+      const propValue = getValue(value, propKey, propSchema, parent);
 
       if (propValue === undefined && propSchema.default !== undefined) {
         result[propKey] = propSchema.default;
-        continue;
       }
 
       this.stack.push(propKey);
@@ -917,7 +922,7 @@ class SchemaResolver {
 
       if (!resolved.ok) {
         errors.push(...resolved.errors);
-      } else {
+      } else if (resolved.value !== undefined) {
         result[propKey] = resolved.value;
       }
     }
@@ -950,7 +955,7 @@ class SchemaResolver {
 
       for (const [k, v] of Object.entries(value)) {
         if (regex.test(k) && !(k in newResult)) {
-          const propValue = getValue(value, k);
+          const propValue = getValue(value, k, propSchema, parent);
           const resolved = await this.internalResolveValues(propSchema, propValue, parent, k, options);
 
           if (!resolved.ok) {
@@ -1005,7 +1010,8 @@ class SchemaResolver {
 
     for (const [k, v] of Object.entries(value)) {
       if (!newResult.hasOwnProperty(k)) {
-        const propValue = getValue(value, k);
+        const propValue = getValue(v, k, schema);
+
         if (typeof addlProps === 'object') {
           const resolved = await this.internalResolveValues(addlProps, propValue, parent, k, options);
 
@@ -1043,7 +1049,7 @@ class SchemaResolver {
     const { getValue = this.options.getValue } = options;
 
     const depSchemas = Object.entries(dependentSchemas)
-      .filter(([prop]) => getValue(value, prop) !== undefined)
+      .filter(([prop]) => getValue(value, prop, dependentSchemas) !== undefined)
       .map(([, schema]) => schema);
 
     if (depSchemas.length === 0) {
@@ -1127,7 +1133,7 @@ class SchemaResolver {
     if (schema.required?.length > 0 && !opts.skipValidation) {
       const { getValue = this.options.getValue } = options;
       const missingProps = schema.required.filter(prop => {
-        return getValue(value, prop) === undefined && schema.properties?.[prop]?.default === undefined;
+        return getValue(value, prop, schema) === undefined && schema.properties?.[prop]?.default === undefined;
       });
 
       if (missingProps.length > 0) {
